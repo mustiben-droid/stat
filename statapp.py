@@ -3,10 +3,12 @@ import pandas as pd
 import os
 import google.generativeai as genai
 
-# ייבוא המודולים מהתיקייה החדשה
-from modules.stats_lab import render_stats_lab
-# כאן תוכל לייבא את שאר המודולים שלך בעתיד:
-# from modules.health_check import render_health_check
+# 1. כאן נכנסים ה-Imports מהתיקייה החדשה!
+from modules.health_check   import render_health_check
+from modules.test_wizard    import render_test_wizard
+from modules.stats_lab      import render_stats_lab
+from modules.thesis_writer  import render_thesis_writer
+from modules.consultation   import render_consultation
 
 # הגדרות עמוד
 st.set_page_config(page_title="Statistical Monster - Thesis Helper", layout="wide", page_icon="🧪")
@@ -91,3 +93,4 @@ if uploaded_file:
 
 else:
     st.info("👋 ברוך הבא! אנא העלה קובץ אקסל בתפריט הצד כדי להתחיל בניתוח.")
+
