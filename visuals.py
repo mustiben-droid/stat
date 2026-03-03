@@ -1,52 +1,48 @@
+import streamlit as st
 import plotly.graph_objects as go
 import plotly.express as px
 import numpy as np
 from scipy.stats import norm
 
 def plot_normality_curve(data, col_name):
-    # יצירת היסטוגרמה עם עקומת גאוס
     mu, std = data.mean(), data.std()
     x = np.linspace(data.min(), data.max(), 100)
     p = norm.pdf(x, mu, std)
-
     fig = go.Figure()
-    # היסטוגרמה
-    fig.add_trace(go.Histogram(x=data, histnorm='probability density', name='Data Distribution', marker_color='#ABDDA4'))
-    # עקומת גאוס
-    fig.add_trace(go.Scatter(x=x, y=p, mode='lines', name='Normal Distribution', line=dict(color='red', width=3)))
-    
-    fig.update_layout(title=f"בדיקת נורמליות: {col_name} (Bell Curve)", template="plotly_white")
+    fig.add_trace(go.Histogram(x=data, histnorm='probability density', name='התפלגות הנתונים', marker_color='#ABDDA4'))
+    fig.add_trace(go.Scatter(x=x, y=p, mode='lines', name='עקומת נורמליות', line=dict(color='red', width=3)))
+    fig.update_layout(title=f"בדיקת נורמליות: {col_name}", template="plotly_white")
     return fig
 
-
-
-def plot_ttest_results(res, col1_name, col2_name):
-    fig = go.Figure()
-    fig.add_trace(go.Bar(
-        x=[col1_name, col2_name],
-        y=[res['mean1'], res['mean2']],
-        error_y=dict(type='data', array=[res['sd1']/(res['n']**0.5), res['sd2']/(res['n']**0.5)]),
-        marker_color=['#1f77b4', '#ff7f0e']
-    ))
-    fig.update_layout(title="השוואת ממוצעים עם Error Bars (SE)", template="plotly_white")
-    return fig
-
-def plot_heatmap(corr_df):
-    return px.imshow(corr_df, text_auto=True, color_continuous_scale='RdBu_r', title="מטריצת מתאמים")
-
-def plot_regression(res, x_name, y_name):
-    """גרף פיזור עם קו רגרסיה (Trendline)"""
-    fig = px.scatter(x=res['x'], y=res['y'], labels={'x': x_name, 'y': y_name},
-                     title=f"רגרסיה ליניארית: {y_name} מנובא ע'י {x_name}",
-                     opacity=0.6)
+# פונקציית הקישור ש-statapp.py מחפש
+def render_visuals(df):
+    st.subheader("📊 ניתוח ויזואלי מתקדם")
     
-    # הוספת קו המגמה
-    x_range = np.linspace(res['x'].min(), res['x'].max(), 100)
-    y_range = res['slope'] * x_range + res['intercept']
+    numeric_cols = df.select_dtypes(include=['number']).columns.tolist()
     
-    fig.add_trace(go.Scatter(x=x_range, y=y_range, mode='lines', 
-                             name=f"y = {res['slope']}x + {res['intercept']}",
-                             line=dict(color='red', width=2)))
-    
-    fig.update_layout(template="plotly_white")
-    return fig
+    if len(numeric_cols) < 1:
+        st.warning("לא נמצאו עמודות מספריות לניתוח.")
+        return
+
+    # בחירת סוג גרף
+    viz_type = st.selectbox("בחר סוג ניתוח", ["התפלגות ונורמליות", "מטריצת מתאמים (Heatmap)", "פיזור ורגרסיה"])
+
+    if viz_type == "התפלגות ונורמליות":
+        col = st.selectbox("בחר עמודה לבדיקה", numeric_cols)
+        fig = plot_normality_curve(df[col].dropna(), col)
+        st.plotly_chart(fig, use_container_width=True)
+
+    elif viz_type == "מטריצת מתאמים (Heatmap)":
+        if len(numeric_cols) > 1:
+            corr = df[numeric_cols].corr()
+            fig = px.imshow(corr, text_auto=True, color_continuous_scale='RdBu_r', title="מטריצת מתאמים בין המשתנים")
+            st.plotly_chart(fig, use_container_width=True)
+        else:
+            st.info("צריך לפחות 2 עמודות מספריות למטריצת מתאמים.")
+
+    elif viz_type == "פיזור ורגרסיה":
+        if len(numeric_cols) >= 2:
+            col_x = st.selectbox("בחר משתנה מנבא (X)", numeric_cols)
+            col_y = st.selectbox("בחר משתנה תלוי (Y)", numeric_cols)
+            fig = px.scatter(df, x=col_x, y=col_y, trendline="ols", title=f"קשר בין {col_x} ל-{col_y}")
+            st.plotly_chart(fig, use_container_width=True)
