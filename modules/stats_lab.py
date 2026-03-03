@@ -54,6 +54,7 @@ def render_stats_lab(df: pd.DataFrame):
                 st.plotly_chart(px.box(valid_df, x=gv, y=dv, color=gv, points="all"), use_container_width=True)
                 _handle_ai(f"One-Way ANOVA: F({df_b},{df_w})={f_stat:.3f}, p={p:.4f}, η²={eta2:.3f}", "anova")
 
+    # חפש את החלק של ה-Two-Way ANOVA והחלף את שורת ה-model בזו:
     elif "Two-Way ANOVA" in test:
         with col_setup:
             f1 = st.selectbox("גורם א' (Factor A):", all_cols, key="f1")
@@ -64,18 +65,28 @@ def render_stats_lab(df: pd.DataFrame):
         with col_results:
             if run_btn:
                 valid_df = df[[f1, f2, dv]].dropna()
-                model = ols(f"{dv} ~ C({f1}) * C({f2})", data=valid_df).fit()
-                anova_table = sm.stats.anova_lm(model, typ=2)
                 
-                st.subheader("📊 לוח ANOVA (Main Effects & Interaction)")
-                st.dataframe(anova_table.style.format("{:.4f}"))
+                # התיקון הקריטי: שימוש ב-Q() כדי לטפל בשמות עם רווחים
+                try:
+                    formula = f'Q("{dv}") ~ C(Q("{f1}")) * C(Q("{f2}"))'
+                    model = ols(formula, data=valid_df).fit()
+                    anova_table = sm.stats.anova_lm(model, typ=2)
+                    
+                    st.subheader("📊 לוח ANOVA (Main Effects & Interaction)")
+                    st.dataframe(anova_table.style.format("{:.4f}"))
+                    
+                    # גרף אינטראקציה
+                    agg_df = valid_df.groupby([f1, f2])[dv].mean().reset_index()
+                    fig = px.line(agg_df, x=f1, y=dv, color=f2, markers=True, title="Interaction Plot")
+                    st.plotly_chart(fig, use_container_width=True)
+                    
+                    # חילוץ p-value של האינטראקציה בצורה בטוחה
+                    p_inter = anova_table.iloc[2, 3] # מיקום האינטראקציה בטבלה
+                    _handle_ai(f"Two-Way ANOVA: Interaction p={p_inter:.4f}", "tw_anova")
                 
-                agg_df = valid_df.groupby([f1, f2])[dv].mean().reset_index()
-                fig = px.line(agg_df, x=f1, y=dv, color=f2, markers=True, title="Interaction Plot")
-                st.plotly_chart(fig, use_container_width=True)
-                
-                p_inter = anova_table.loc[f"C({f1}):C({f2})", "PR(>F)"]
-                _handle_ai(f"Two-Way ANOVA: Interaction p={p_inter:.4f}", "tw_anova")
+                except Exception as e:
+                    st.error(f"שגיאה בחישוב המודל: {e}")
+                    st.info("טיפ: וודא ששמות העמודות באקסל אינם מכילים תווים מיוחדים מאוד.")
 
     elif "Regression" in test:
         with col_setup:
