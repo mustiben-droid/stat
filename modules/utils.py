@@ -8,7 +8,7 @@ import google.generativeai as genai
 def ai_show(prompt):
     """מציג תשובה מ-Gemini בתוך תיבה מעוצבת"""
     try:
-        model = genai.GenerativeModel('gemini-1.5-flash')
+        model = genai.GenerativeModel('gemini-2.0-flash')
         response = model.generate_content(prompt)
         st.info("🤖 **פרשנות AI:**")
         st.write(response.text)
