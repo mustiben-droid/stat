@@ -123,11 +123,52 @@ def render_stats_lab(df: pd.DataFrame):
 
 def _handle_ai(res_str, key):
     st.divider()
-    c1, c2 = st.columns([3, 1])
-    with c1:
-        ctx = st.text_input("הקשר (אופציונלי):", key=f"ctx_{key}")
-    with c2:
-        st.write("")
-        if st.button("🤖 פרש ב-AI", key=f"ai_{key}"):
-            store_result(res_str)
-            ai_show(f"אתה סטטיסטיקאי. תוצאה: {res_str}. הקשר: {ctx}. נסח APA בעברית.")
+    st.subheader("🤖 צ'אט ניתוח ממצאים")
+    
+    # 1. אתחול היסטוריית השיחה אם היא לא קיימת
+    chat_key = f"chat_history_{key}"
+    if chat_key not in st.session_state:
+        st.session_state[chat_key] = [
+            {"role": "assistant", "content": f"היי! ניתחתי את הנתונים. התוצאה היא: {res_str}. מה תרצה לדעת על הממצא הזה?"}
+        ]
+
+    # 2. תצוגת השיחה הקיימת
+    for message in st.session_state[chat_key]:
+        with st.chat_message(message["role"]):
+            st.markdown(message["content"])
+
+    # 3. שדה קלט לצ'אט
+    if prompt := st.chat_input("שאל אותי משהו על הממצאים...", key=f"input_{key}"):
+        # הוספת הודעת המשתמש להיסטוריה
+        st.session_state[chat_key].append({"role": "user", "content": prompt})
+        with st.chat_message("user"):
+            st.markdown(prompt)
+
+        # יצירת תשובה מה-AI עם ההקשר של כל השיחה
+        with st.chat_message("assistant"):
+            try:
+                # בניית ההקשר המלא ל-Gemini
+                history_context = "\n".join([f"{m['role']}: {m['content']}" for m in st.session_state[chat_key]])
+                full_prompt = f"""
+                אתה סטטיסטיקאי מומחה. זהו הקשר השיחה עד כה:
+                {history_context}
+                
+                ענה על השאלה האחרונה של הסטודנט בצורה מקצועית, אקדמית ובעברית.
+                """
+                
+                # שימוש בפונקציה מה-utils (וודא שהיא מחזירה את הטקסט)
+                import google.generativeai as genai
+                model = genai.GenerativeModel('gemini-1.5-flash')
+                response = model.generate_content(full_prompt)
+                
+                answer = response.text
+                st.markdown(answer)
+                
+                # שמירת תשובת ה-AI להיסטוריה
+                st.session_state[chat_key].append({"role": "assistant", "content": answer})
+                
+                # שמירה לטאב של כתיבת התזה (אופציונלי)
+                store_result(f"שאלה: {prompt} | תשובה: {answer}")
+                
+            except Exception as e:
+                st.error(f"שגיאה בחיבור ל-AI: {e}")
