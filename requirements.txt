@@ -1,7 +1,6 @@
 streamlit
 pandas
-plotly
-scipy
 openpyxl
-statsmodels
+plotly
 google-generativeai
+statsmodels
