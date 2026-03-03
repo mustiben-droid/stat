@@ -23,27 +23,37 @@ uploaded_file = st.sidebar.file_uploader("העלה קובץ אקסל (XLSX)", ty
 if uploaded_file:
     df = pd.read_excel(uploaded_file)
     
-    # ניסיון המרה אוטומטי ראשוני למספרים
+    # ניסיון המרה אוטומטי ראשוני
     for col in df.columns:
         df[col] = pd.to_numeric(df[col], errors='ignore')
 
     st.success("הקובץ נטען בהצלחה!")
 
-    # --- בורר עמודות נומינליות בתפריט הצד ---
-    st.sidebar.header("⚙️ הגדרות משתנים")
-    all_cols = df.columns.tolist()
+    # --- ה-Variable View שלכם (כמו ב-SPSS) ---
+    st.sidebar.header("⚙️ Variable View (הגדרת משתנים)")
     
-    nominal_cols = st.sidebar.multiselect(
-        "בחר עמודות שהן קטגוריות (נומינלי):", 
-        options=all_cols,
-        help="עמודות אלו יהפכו לטקסט ולא ייכללו בחישובים מספריים"
-    )
+    column_types = {}
+    for col in df.columns:
+        # זיהוי אוטומטי ראשוני להמלצה
+        default_type = "Scale (Numeric)" if pd.api.types.is_numeric_dtype(df[col]) else "Nominal (Text)"
+        
+        # בחירת סוג המשתנה לכל עמודה
+        column_types[col] = st.sidebar.selectbox(
+            f"סוג המשתנה עבור {col}:",
+            options=["Scale (Numeric)", "Nominal (Text)"],
+            index=0 if default_type == "Scale (Numeric)" else 1,
+            key=f"type_{col}"
+        )
 
-    # המרת העמודות הנבחרות לטקסט
-    for col in nominal_cols:
-        df[col] = df[col].astype(str)
+    # החלת השינויים על ה-DataFrame
+    for col, v_type in column_types.items():
+        if v_type == "Nominal (Text)":
+            df[col] = df[col].astype(str)
+        else:
+            # ניסיון להפוך חזרה למספר אם המשתמש התחרט
+            df[col] = pd.to_numeric(df[col], errors='coerce')
 
-    # יצירת רשימה מעודכנת של עמודות מספריות (לצורך הסטטיסטיקה התיאורית)
+    # יצירת DataFrame מסונן לחישובים (רק מה שהוגדר כ-Scale)
     numeric_only_df = df.select_dtypes(include=['number'])
     
     # --- תצוגת הטאבים ---
@@ -67,4 +77,5 @@ if uploaded_file:
         ai_engine.render_ai_analysis(df)
 else:
     st.info("ממתין להעלאת קובץ...")
+
 
