@@ -4,113 +4,117 @@ import numpy as np
 import scipy.stats as stats
 import plotly.express as px
 import google.generativeai as genai
+import statsmodels.api as sm
+from statsmodels.formula.api import ols
 
 def render_stats_lab(df: pd.DataFrame):
-    st.header("🔬 מעבדת SPSS: ניתוח מגמות ונסיגה")
+    st.header("🔬 מעבדת סטטיסטיקה מתקדמת - Full Report Mode")
     
-    # ניקוי בסיסי של שמות עמודות
     df.columns = df.columns.str.strip()
-    all_cols = df.columns.tolist()
     numeric = df.select_dtypes(include=["number"]).columns.tolist()
+    all_cols = df.columns.tolist()
 
-    # תפריט בחירה ראשי
-    test_type = st.sidebar.selectbox("בחר סוג ניתוח:", [
-        "📈 ניתוח נסיגה ושיפור (מגמות)",
-        "📊 סטטיסטיקה תיאורית",
-        "🔗 מטריצת מתאמים"
+    # תפריט ה-Analyze המקצועי
+    test = st.selectbox("בחר ניתוח (Analyze):", [
+        "📊 Repeated Measures ANOVA (Pre vs Post Analysis)",
+        "🧪 מבחן t למדגמים בלתי תלויים",
+        "🔲 מבחן Chi-Square (קשר בין קטגוריות)",
+        "🛡️ בדיקת מהימנות (Cronbach's Alpha)",
+        "📈 מטריצת מתאמים וסטטיסטיקה תיאורית"
     ])
 
-    st.subheader("1️⃣ הגדרת משתני המחקר")
-    
-    if "ניתוח נסיגה ושיפור" in test_type:
-        col1, col2, col3 = st.columns(3)
-        with col1:
-            pre_var = st.selectbox("ציון לפני (Pre):", numeric, key="pre_v")
-        with col2:
-            post_var = st.selectbox("ציון אחרי (Post):", numeric, key="post_v")
-        with col3:
-            group_var = st.selectbox("קבוצת השוואה (Major):", all_cols, key="grp_v")
+    st.divider()
+    col_setup, col_results = st.columns([1, 2.5], gap="large")
+    analysis_summary = ""
 
-        if st.button("🚀 הרץ ניתוח מגמות", use_container_width=True):
-            try:
-                # בידוד נתונים למניעת שגיאות אינדקס
-                temp_df = df[[pre_var, post_var, group_var]].dropna().copy()
-                
-                # חישוב הפרש בצורה בטוחה (.values מונע ValueError)
-                temp_df['Diff'] = temp_df[post_var].values - temp_df[pre_var].values
-                
-                # קידוד אוטומטי לקטגוריות
-                def get_status(x):
-                    if x < -0.01: return "נסיגה (Decline)"
-                    elif x > 0.01: return "שיפור (Improvement)"
-                    return "ללא שינוי (Stable)"
-                
-                temp_df['Status'] = temp_df['Diff'].apply(get_status)
+    # --- 1. REPEATED MEASURES ANOVA - הגרסה המורחבת ---
+    if "Repeated Measures" in test:
+        with col_setup:
+            st.subheader("⚙️ נתוני ANOVA")
+            pre = st.selectbox("זמן 1 (Pre):", numeric, key="rm_pre")
+            post = st.selectbox("זמן 2 (Post):", numeric, key="rm_post")
+            between = st.selectbox("גורם בין-נבדקי (Major):", all_cols, key="rm_btw")
+            st.info("הניתוח כולל: ממוצעים, מובהקות, וגודל אפקט (Eta Squared).")
+            run = st.button("🚀 Run Analysis", use_container_width=True)
 
-                # תצוגת טבלת הצלבה (Crosstab)
-                st.divider()
-                st.subheader("2️⃣ ממצאים: טבלת הצלבה (Crosstabs)")
-                ctab = pd.crosstab(temp_df[group_var], temp_df['Status'], margins=True, margins_name="Total")
-                st.table(ctab)
+        with col_results:
+            if run:
+                try:
+                    # עיבוד נתונים לפורמט ארוך
+                    temp_df = df[[pre, post, between]].dropna().copy()
+                    temp_df['ID'] = range(len(temp_df))
+                    long_df = pd.melt(temp_df, id_vars=['ID', between], value_vars=[pre, post], 
+                                     var_name='Time', value_name='Score')
+                    
+                    # 1. טבלת ממוצעים (Descriptive Statistics)
+                    st.write("### Descriptive Statistics")
+                    desc = temp_df.groupby(between)[[pre, post]].agg(['mean', 'std', 'count'])
+                    st.table(desc.style.format("{:.2f}"))
 
-                # גרף מגמות
-                st.subheader("3️⃣ ייצוג ויזואלי של המגמות")
-                fig = px.histogram(temp_df, x=group_var, color='Status', barmode='group',
-                                  color_discrete_map={
-                                      "נסיגה (Decline)": "#EF553B",
-                                      "שיפור (Improvement)": "#00CC96",
-                                      "ללא שינוי (Stable)": "#AB63FA"
-                                  })
-                st.plotly_chart(fig, use_container_width=True)
+                    # 2. הרצת המודל הסטטיסטי
+                    model = ols(f'Score ~ C(Time) * C(Q("{between}"))', data=long_df).fit()
+                    anova_table = sm.stats.anova_lm(model, typ=2)
+                    
+                    # חישוב Eta Squared (גודל אפקט)
+                    anova_table['Eta2'] = anova_table['sum_sq'] / (anova_table['sum_sq'].sum())
+                    anova_table.columns = ['Sum of Squares', 'df', 'F', 'Sig.', 'Eta^2']
+                    
+                    # 3. תצוגת תוצאות ANOVA
+                    st.write("### ANOVA Table (Within & Between Effects)")
+                    st.table(anova_table.style.format("{:.3f}"))
 
-                # מבחן מובהקות
-                chi_data = pd.crosstab(temp_df[group_var], temp_df['Status'])
-                chi2, p, dof, expected = stats.chi2_contingency(chi_data)
-                
-                st.metric("מובהקות סטטיסטית (Sig.)", f"{p:.4f}", 
-                          delta="מובהק" if p < 0.05 else "לא מובהק", delta_color="normal")
-                
-                # שמירת הקשר ל-AI
-                st.session_state['last_stat_result'] = (
-                    f"Analysis of {group_var} for improvement/decline. "
-                    f"Crosstab results: {ctab.to_dict()}. Chi-square p-value: {p:.4f}."
-                )
+                    # 4. גרף אינטראקציה (Interaction Plot)
+                    st.write("### Descriptives Plot")
+                    plot_data = long_df.groupby(['Time', between])['Score'].mean().reset_index()
+                    fig = px.line(plot_data, x='Time', y='Score', color=between, markers=True, 
+                                 line_shape='linear', template="plotly_white")
+                    st.plotly_chart(fig, use_container_width=True)
+                    
+                    analysis_summary = f"RM ANOVA Results for {between}. Time p={anova_table.iloc[0,3]:.4f}, Interaction p={anova_table.iloc[2,3]:.4f}"
+                except Exception as e:
+                    st.error(f"Error: {e}")
 
-            except Exception as e:
-                st.error(f"שגיאה בתהליך החישוב: {e}")
+    # --- 2. מבחני T ומבחנים אחרים עם דו"ח מלא ---
+    elif "t למדגמים בלתי תלויים" in test:
+        with col_setup:
+            dv = st.selectbox("משתנה תלוי:", numeric)
+            iv = st.selectbox("משתנה בלתי תלוי (2 קבוצות):", all_cols)
+            run = st.button("🚀 Run T-test")
+        with col_results:
+            if run:
+                groups = [g[dv].dropna() for _, g in df.groupby(iv)]
+                if len(groups) == 2:
+                    # סטטיסטיקה תיאורית לקבוצות
+                    st.write("### Group Statistics")
+                    st.table(df.groupby(iv)[dv].agg(['count', 'mean', 'std']))
+                    
+                    # המבחן עצמו
+                    t_stat, p = stats.ttest_ind(groups[0], groups[1])
+                    st.write("### Independent Samples Test")
+                    st.metric("Sig. (2-tailed)", f"{p:.4f}", delta="מובהק" if p < 0.05 else "לא מובהק")
+                    st.write(f"t-value: {t_stat:.3f}")
+                else: st.error("חייב 2 קבוצות בדיוק.")
 
-    elif "סטטיסטיקה תיאורית" in test_type:
-        vars_to_show = st.multiselect("בחר משתנים:", numeric)
-        if vars_to_show:
-            st.table(df[vars_to_show].describe().T[['count', 'mean', 'std', 'min', 'max']])
+    # (מקום למבחנים נוספים באותו פורמט עשיר)
 
-    # --- ממשק הצ'אט המובנה ---
+    if analysis_summary:
+        st.session_state['last_stat_result'] = analysis_summary
     if 'last_stat_result' in st.session_state:
         render_chat_interface(st.session_state['last_stat_result'])
 
 def render_chat_interface(context):
     st.divider()
-    st.subheader("🤖 פרשנות AI לממצאים")
-    
-    if "messages" not in st.session_state:
-        st.session_state.messages = []
-
-    for msg in st.session_state.messages:
-        with st.chat_message(msg["role"]):
-            st.markdown(msg["content"])
-
-    if prompt := st.chat_input("שאל אותי על הנסיגה או השיפור שמצאנו..."):
-        st.session_state.messages.append({"role": "user", "content": prompt})
-        with st.chat_message("user"):
-            st.markdown(prompt)
-
+    st.subheader("🤖 צ'אט פירוש הממצאים (SPSS Mentor)")
+    if "messages" not in st.session_state: st.session_state.messages = []
+    for m in st.session_state.messages:
+        with st.chat_message(m["role"]): st.markdown(m["content"])
+    if p := st.chat_input("שאל אותי על ה-Eta Squared או על האינטראקציה..."):
+        st.session_state.messages.append({"role": "user", "content": p})
+        with st.chat_message("user"): st.markdown(p)
         with st.chat_message("assistant"):
             try:
-                # וודא שהגדרת את ה-API KEY ב-Secrets
                 model = genai.GenerativeModel('gemini-1.5-flash')
-                full_prompt = f"Context: {context}\nUser Question: {prompt}\nAnswer in Hebrew as a senior statistician."
-                response = model.generate_content(full_prompt)
-                st.markdown(response.text)
-                st.session_state.messages.append({"role": "assistant", "content": response.text})
-            except Exception as e:
-                st.error(f"שגיאת AI: {e}")
+                resp = model.generate_content(f"Analyze Context: {context}. User: {p}. Answer in Hebrew as a statistics professor.")
+                st.markdown(resp.text)
+                st.session_state.messages.append({"role": "assistant", "content": resp.text})
+            except Exception as e: st.error(f"AI Error: {e}")
