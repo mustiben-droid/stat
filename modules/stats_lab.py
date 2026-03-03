@@ -18,7 +18,6 @@ def render_stats_lab(df: pd.DataFrame):
     numeric = df.select_dtypes(include="number").columns.tolist()
     all_cols = df.columns.tolist()
 
-    # תפריט המבחנים המשודרג
     test = st.selectbox("בחר מבחן סטטיסטי:", [
         "📈 ניתוח שונות חד-כיווני (One-Way ANOVA)",
         "📊 ניתוח שונות דו-כיווני (Two-Way ANOVA)",
@@ -30,7 +29,6 @@ def render_stats_lab(df: pd.DataFrame):
     st.divider()
     col_setup, col_results = st.columns([1, 2], gap="large")
 
-    # --- 1. One-Way ANOVA ---
     if "One-Way ANOVA" in test:
         with col_setup:
             gv = st.selectbox("משתנה קטגוריאלי (IV):", all_cols)
@@ -49,7 +47,6 @@ def render_stats_lab(df: pd.DataFrame):
                 eta2 = (f_stat * df_b) / (f_stat * df_b + df_w)
 
                 st.subheader(f"📊 תוצאות: {significance_badge(p)}")
-                st.caption(f"בוצע על {n_valid} נבדקים (נופו {len(df)-n_valid} חסרים)")
                 apa_table([("F", f"{f_stat:.3f}"), ("df", f"({df_b}, {df_w})"), ("p-value", f"{p:.4f}"), ("η²", f"{eta2:.3f}")])
                 
                 if p < 0.05 and show_post:
@@ -57,7 +54,6 @@ def render_stats_lab(df: pd.DataFrame):
                 st.plotly_chart(px.box(valid_df, x=gv, y=dv, color=gv, points="all"), use_container_width=True)
                 _handle_ai(f"One-Way ANOVA: F({df_b},{df_w})={f_stat:.3f}, p={p:.4f}, η²={eta2:.3f}", "anova")
 
-    # --- 2. Two-Way ANOVA (חדש!) ---
     elif "Two-Way ANOVA" in test:
         with col_setup:
             f1 = st.selectbox("גורם א' (Factor A):", all_cols, key="f1")
@@ -74,7 +70,6 @@ def render_stats_lab(df: pd.DataFrame):
                 st.subheader("📊 לוח ANOVA (Main Effects & Interaction)")
                 st.dataframe(anova_table.style.format("{:.4f}"))
                 
-                # גרף אינטראקציה
                 agg_df = valid_df.groupby([f1, f2])[dv].mean().reset_index()
                 fig = px.line(agg_df, x=f1, y=dv, color=f2, markers=True, title="Interaction Plot")
                 st.plotly_chart(fig, use_container_width=True)
@@ -82,7 +77,6 @@ def render_stats_lab(df: pd.DataFrame):
                 p_inter = anova_table.loc[f"C({f1}):C({f2})", "PR(>F)"]
                 _handle_ai(f"Two-Way ANOVA: Interaction p={p_inter:.4f}", "tw_anova")
 
-    # --- 3. Regression ---
     elif "Regression" in test:
         with col_setup:
             y_var = st.selectbox("משתנה תלוי (Y):", numeric)
@@ -98,20 +92,18 @@ def render_stats_lab(df: pd.DataFrame):
                 
                 st.subheader(f"📊 מודל רגרסיה: R² = {r2:.3f}")
                 
-                # טבלת VIF
                 if len(x_vars) > 1:
-                    st.write("**בדיקת מולטי-קוליניאריות (VIF):**")
                     vif_list = []
                     for var in x_vars:
                         x_o = X.drop(columns=[var])
                         r2_v = LinearRegression().fit(x_o, X[var]).score(x_o, X[var])
                         vif = 1 / (1 - r2_v) if r2_v < 1 else 99
                         vif_list.append((var, f"{vif:.2f}"))
+                    st.write("**בדיקת מולטי-קוליניאריות (VIF):**")
                     apa_table(vif_list)
                 
                 _handle_ai(f"Regression: R²={r2:.3f}, Predictors={x_vars}", "reg")
 
-    # --- 4. Correlation ---
     elif "Correlation" in test:
         with col_setup:
             selected = st.multiselect("בחר משתנים:", numeric, default=numeric[:3] if len(numeric)>2 else numeric)
@@ -126,3 +118,11 @@ def render_stats_lab(df: pd.DataFrame):
                 _handle_ai(f"Correlation Matrix for: {selected}", "corr")
 
 def _handle_ai(res_str, key):
+    st.divider()
+    c1, c2 = st.columns([3, 1])
+    with c1: ctx = st.text_input("הקשר (אופציונלי):", key=f"ctx_{key}")
+    with c2:
+        st.write("")
+        if st.button("🤖 פרש ב-AI", key=f"ai_{key}"):
+            store_result(res_str)
+            ai_show(f"אתה סטטיסטיקאי. תוצאה: {res_str}. הקשר: {ctx}. נסח APA בעברית, השאר מונחים באנגלית.")
