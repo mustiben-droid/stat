@@ -13,7 +13,7 @@ def render_ai_analysis(df):
         if user_question:
             try:
                 # יצירת המודל
-                model = genai.GenerativeModel('gemini-1.5-flash')
+                model = genai.GenerativeModel('gemini-2.0-flash')
                 
                 # הכנת הנתונים למודל (שליחת התיאור הסטטיסטי של הטבלה)
                 stats_summary = df.describe().to_string()
@@ -38,3 +38,4 @@ def render_ai_analysis(df):
                 st.error(f"אירעה שגיאה בתקשורת עם ה-AI: {e}")
         else:
             st.warning("בבקשה כתוב שאלה לפני שאלחץ.")
+
