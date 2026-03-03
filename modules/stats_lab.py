@@ -8,107 +8,154 @@ from statsmodels.formula.api import ols
 import google.generativeai as genai
 
 def render_stats_lab(df: pd.DataFrame):
-    st.header("🔬 Statistic Analyzer")
+    st.header("🔬 Statistic Analyzer & AI Research Partner")
     
     # ניקוי בסיסי
     df.columns = df.columns.str.strip()
     all_cols = df.columns.tolist()
     numeric_cols = df.select_dtypes(include=[np.number]).columns.tolist()
 
-    # תפריט צד מלא - כל האופציות שביקשת
-    analysis_type = st.sidebar.radio("Analysis Menu", [
+    # אתחול זיכרון גלובלי
+    if 'global_context' not in st.session_state:
+        st.session_state['global_context'] = "No analysis performed yet."
+    if "messages" not in st.session_state:
+        st.session_state.messages = []
+
+    # תפריט ניתוחים
+    analysis_type = st.sidebar.radio("בחר סוג ניתוח", [
         "📊 Descriptives",
         "📈 ANOVA (Repeated Measures)",
-        "🧪 T-Tests (Independent/Paired)",
+        "🧪 T-Tests",
         "🛡️ Reliability (Cronbach's Alpha)",
         "🔗 Correlations Matrix",
         "🔲 Frequencies (Chi-Square)"
     ])
 
     st.divider()
-    context_for_ai = ""
 
-    # --- 1. ANOVA (Repeated Measures) ---
-    if analysis_type == "📈 ANOVA (Repeated Measures)":
+    # --- 1. DESCRIPTIVES ---
+    if analysis_type == "📊 Descriptives":
+        vars_d = st.multiselect("בחר משתנים:", numeric_cols)
+        group_d = st.selectbox("קבץ לפי (Major):", ["ללא"] + all_cols)
+        if vars_d:
+            if group_d == "ללא":
+                res = df[vars_d].describe().T
+            else:
+                res = df.groupby(group_d)[vars_d].describe().stack(level=0)
+            st.table(res.style.format("{:.2f}"))
+            st.session_state['global_context'] = f"סטטיסטיקה תיאורית למשתנים {vars_d} לפי {group_d}."
+
+    # --- 2. ANOVA (Repeated Measures) ---
+    elif analysis_type == "📈 ANOVA (Repeated Measures)":
         col_setup, col_out = st.columns([1, 2])
         with col_setup:
-            levels = st.multiselect("RM Factors (Levels):", numeric_cols, help="סדר הבחירה קובע את סדר הגרף (Pre אז Post)")
-            between_subject = st.selectbox("Between Subjects Factor (Major):", all_cols)
-            run_anova = st.button("🚀 Run Full ANOVA")
-
+            levels = st.multiselect("רמות זמן (סדר הבחירה קובע):", numeric_cols)
+            between = st.selectbox("גורם בין-נבדקי (Major):", all_cols)
+            run_anova = st.button("הרץ ANOVA")
+        
         if run_anova and len(levels) > 1:
             with col_out:
                 try:
-                    tdf = df[levels + [between_subject]].dropna().copy()
+                    tdf = df[levels + [between]].dropna().copy()
                     tdf['ID'] = range(len(tdf))
-                    # כפיית סדר כרונולוגי לפי הבחירה של המשתמש
-                    long_df = pd.melt(tdf, id_vars=['ID', between_subject], value_vars=levels, 
-                                     var_name='Time', value_name='Score')
+                    # כפיית סדר כרונולוגי כדי שהגרף לא יתהפך
+                    long_df = pd.melt(tdf, id_vars=['ID', between], value_vars=levels, var_name='Time', value_name='Score')
                     long_df['Time'] = pd.Categorical(long_df['Time'], categories=levels, ordered=True)
-
-                    # ANOVA Table Type III
-                    model = ols(f'Score ~ C(Time) * C(Q("{between_subject}"))', data=long_df).fit()
-                    anova_table = sm.stats.anova_lm(model, typ=3)
                     
-                    # חישובי SPSS (Mean Square & Eta Squared)
-                    anova_table['Mean Square'] = anova_table['sum_sq'] / anova_table['df']
-                    ss_res = anova_table.loc['Residual', 'sum_sq']
-                    anova_table['η²p'] = anova_table['sum_sq'] / (anova_table['sum_sq'] + ss_res)
+                    model = ols(f'Score ~ C(Time) * C(Q("{between}"))', data=long_df).fit()
+                    res = sm.stats.anova_lm(model, typ=3)
                     
-                    st.write("### Tests of Within-Subjects Effects")
-                    st.table(anova_table.style.format("{:.3f}").highlight_between(subset=['PR(>F)'], left=0, right=0.05, color='#ffcccc'))
-
-                    # גרף - הסדר נשמר לפי הבחירה ב-multiselect
-                    st.write("### Descriptives Plot")
-                    fig = px.line(long_df.groupby(['Time', between_subject], observed=True)['Score'].mean().reset_index(), 
-                                 x='Time', y='Score', color=between_subject, markers=True, template="plotly_white")
+                    st.write("### ANOVA Table (Type III)")
+                    st.table(res.style.format("{:.3f}").highlight_between(subset=['PR(>F)'], left=0, right=0.05, color='#ffcccc'))
+                    
+                    fig = px.line(long_df.groupby(['Time', between], observed=True)['Score'].mean().reset_index(), 
+                                 x='Time', y='Score', color=between, markers=True, template="plotly_white")
                     st.plotly_chart(fig)
-                    context_for_ai = f"ANOVA Result: {anova_table.to_dict()}. Target: {between_subject}."
-                    st.session_state['last_context'] = context_for_ai
-                except Exception as e: st.error(f"Error: {e}")
+                    
+                    st.session_state['global_context'] = f"ANOVA על {levels} לפי {between}. תוצאות: {res.to_dict()}."
+                except Exception as e:
+                    st.error(f"שגיאה: {e}")
 
-    # --- 2. RELIABILITY (Cronbach's Alpha) ---
+    # --- 3. T-TESTS ---
+    elif analysis_type == "🧪 T-Tests":
+        t_mode = st.radio("סוג מבחן", ["Independent (בין קבוצות)", "Paired (אותה קבוצה)"])
+        if t_mode == "Independent (בין קבוצות)":
+            dv = st.selectbox("משתנה תלוי (ציון):", numeric_cols)
+            iv = st.selectbox("משתנה בלתי תלוי (קבוצה):", all_cols)
+            if st.button("בצע T-Test"):
+                groups = df[iv].unique()
+                if len(groups) == 2:
+                    g1 = df[df[iv] == groups[0]][dv].dropna()
+                    g2 = df[df[iv] == groups[1]][dv].dropna()
+                    t_stat, p = stats.ttest_ind(g1, g2)
+                    st.metric("p-value", f"{p:.4f}")
+                    st.write(f"t-statistic: {t_stat:.3f}")
+                    st.session_state['global_context'] = f"T-test בלתי תלוי בין קבוצות {groups} במשתנה {dv}. p={p}."
+        else:
+            v1 = st.selectbox("זמן 1:", numeric_cols)
+            v2 = st.selectbox("זמן 2:", numeric_cols)
+            if st.button("בצע Paired T-Test"):
+                t_stat, p = stats.ttest_rel(df[v1].dropna(), df[v2].dropna())
+                st.metric("p-value", f"{p:.4f}")
+                st.session_state['global_context'] = f"T-test מזווג בין {v1} ל-{v2}. p={p}."
+
+    # --- 4. RELIABILITY (קרונבך) ---
     elif analysis_type == "🛡️ Reliability (Cronbach's Alpha)":
-        items = st.multiselect("Select items:", numeric_cols)
-        if st.button("Calculate α") and len(items) > 1:
+        items = st.multiselect("בחר פריטים לשאלון:", numeric_cols)
+        if st.button("חשב מהימנות"):
             idat = df[items].dropna()
             k = len(items)
             alpha = (k/(k-1)) * (1 - idat.var().sum() / idat.sum(axis=1).var())
-            st.metric("Cronbach's Alpha", f"{alpha:.3f}")
-            context_for_ai = f"Reliability Alpha for {items}: {alpha:.3f}"
-            st.session_state['last_context'] = context_for_ai
+            st.metric("Cronbach's Alpha (α)", f"{alpha:.3f}")
+            st.session_state['global_context'] = f"מהימנות קרונבך ל-{items} יצאה {alpha:.3f}."
 
-    # --- 3. CORRELATIONS ---
+    # --- 5. CORRELATIONS ---
     elif analysis_type == "🔗 Correlations Matrix":
-        vars_corr = st.multiselect("Select variables:", numeric_cols)
+        vars_corr = st.multiselect("בחר משתנים למתאם:", numeric_cols)
         if vars_corr:
             corr = df[vars_corr].corr()
             st.write("### Pearson Correlation Matrix")
             st.table(corr.style.background_gradient(cmap='coolwarm').format("{:.3f}"))
-            context_for_ai = f"Correlation matrix: {corr.to_dict()}"
-            st.session_state['last_context'] = context_for_ai
+            st.session_state['global_context'] = f"מטריצת מתאמים למשתנים {vars_corr}."
 
-    # --- 4. T-TESTS, DESCRIPTIVES, CHI-SQUARE (נשארו כפי שהיו) ---
-    # ... (הקוד של T-Test ו-Descriptives נשאר זהה לגרסה הקודמת)
+    # --- 6. CHI-SQUARE ---
+    elif analysis_type == "🔲 Frequencies (Chi-Square)":
+        v1 = st.selectbox("משתנה 1 (שורות):", all_cols)
+        v2 = st.selectbox("משתנה 2 (עמודות):", all_cols)
+        if st.button("הרץ Chi-Square"):
+            ct = pd.crosstab(df[v1], df[v2])
+            st.table(ct)
+            chi2, p, _, _ = stats.chi2_contingency(ct)
+            st.metric("p-value", f"{p:.4f}")
+            st.session_state['global_context'] = f"מבחן Chi-square בין {v1} ל-{v2}. p={p}."
 
-    # --- GEMINI 2.0 FLASH CHAT ---
-    if 'last_context' in st.session_state or context_for_ai:
-        st.divider()
-        st.subheader("🤖 AI Insights (Gemini 2.0 Flash)")
-        if "messages" not in st.session_state: st.session_state.messages = []
+    # --- AI RECOMMENDATIONS & CHAT ---
+    st.divider()
+    
+    col_ai1, col_ai2 = st.columns([1, 1])
+    
+    with col_ai1:
+        st.subheader("💡 יועץ מחקר (Recommendations)")
+        if st.button("מה כדאי לי להריץ עכשיו?"):
+            with st.spinner("מנתח את המצב..."):
+                try:
+                    model = genai.GenerativeModel('gemini-2.0-flash')
+                    prompt = f"Context: {st.session_state['global_context']}\nVariables: {all_cols}\nSuggest next steps for a thesis in Hebrew."
+                    response = model.generate_content(prompt)
+                    st.markdown(response.text)
+                except Exception as e: st.error(e)
+
+    with col_ai2:
+        st.subheader("💬 התייעצות חופשית")
         for m in st.session_state.messages:
             with st.chat_message(m["role"]): st.markdown(m["content"])
-        
-        if prompt := st.chat_input("שאל על הממצאים..."):
+            
+        if prompt := st.chat_input("שאל אותי על התוצאות..."):
             st.session_state.messages.append({"role": "user", "content": prompt})
             with st.chat_message("user"): st.markdown(prompt)
             with st.chat_message("assistant"):
-                try:
-                    # שימוש במודל 2.0 Flash המדויק
-                    model = genai.GenerativeModel('gemini-2.0-flash') 
-                    ctx = st.session_state.get('last_context', "General data analysis.")
-                    full_p = f"Context: {ctx}\nUser: {prompt}\nAnswer in Hebrew as a statistics expert."
-                    resp = model.generate_content(full_p)
-                    st.markdown(resp.text)
-                    st.session_state.messages.append({"role": "assistant", "content": resp.text})
-                except Exception as e: st.error(f"AI Error: {e}")
+                model = genai.GenerativeModel('gemini-2.0-flash')
+                full_p = f"Context: {st.session_state['global_context']}\nUser: {prompt}\nAnswer in Hebrew."
+                resp = model.generate_content(full_p)
+                st.markdown(resp.text)
+                st.session_state.messages.append({"role": "assistant", "content": resp.text})
