@@ -7,106 +7,138 @@ import google.generativeai as genai
 from statsmodels.formula.api import ols
 import statsmodels.api as sm
 
-from .utils import ai_show, store_result
-
 def render_stats_lab(df: pd.DataFrame):
-    st.header("🔬 המעבדה הסטטיסטית (StatsMonster Pro)")
+    st.header("🔬 מעבדת SPSS מתקדמת")
     
-    # זיהוי עמודות
     numeric = df.select_dtypes(include=["number"]).columns.tolist()
     all_cols = df.columns.tolist()
 
-    # בחירת המבחן - זה ה"מתג" הראשי
-    test = st.selectbox("בחר מבחן סטטיסטי מהרשימה:", [
-        "📉 ניתוח שיפור (Pre-Post Comparison)",
+    test = st.selectbox("בחר ניתוח (Analyze):", [
+        "📈 ניתוח שיפור (Pre-Post Comparison)",
         "📊 ניתוח שונות דו-כיווני (Two-Way ANOVA)",
-        "🔗 רגרסיה לינארית (Linear Regression)"
-    ], index=0)
+        "🧪 מבחן t למדגמים בלתי תלויים (Independent t-test)",
+        "🧪 מבחן t למדגמים מזווגים (Paired t-test)",
+        "🔗 מתאם פירסון (Correlations)",
+        "📉 רגרסיה לינארית (Linear Regression)",
+        "🛡️ בדיקת מהימנות (Cronbach's Alpha)",
+        "📊 סטטיסטיקה תיאורית (Descriptives)"
+    ])
 
     st.divider()
-
-    # הגדרת עמודות לממשק: ימין להגדרות, שמאל לתוצאות
     col_setup, col_results = st.columns([1, 2], gap="large")
+    analysis_summary = ""
 
-    # --- אפשרות 1: ניתוח שיפור ---
-    if "ניתוח שיפור" in test:
+    # --- 1. Independent t-test (SPSS Format) ---
+    if "Independent t-test" in test:
         with col_setup:
-            st.subheader("⚙️ הגדרות שיפור")
-            pre_col = st.selectbox("בחר ציון קדם (Pre):", numeric, key="imp_pre")
-            post_col = st.selectbox("בחר ציון פוסט (Post):", numeric, key="imp_post")
-            group_col = st.selectbox("בחר משתנה מגמה/קבוצה:", all_cols, key="imp_group")
-            run_imp = st.button("🚀 הרץ ניתוח שיפור", use_container_width=True, key="btn_imp")
-
+            dv = st.selectbox("Test Variable (רציף):", numeric)
+            iv = st.selectbox("Grouping Variable (קבוצות):", all_cols)
+            run = st.button("הרץ t-test")
         with col_results:
-            if run_imp:
-                try:
-                    # חישוב
-                    temp_df = df[[pre_col, post_col, group_col]].dropna().copy()
-                    temp_df['Improvement'] = temp_df[post_col].values - temp_df[pre_col].values
+            if run:
+                grps = df.groupby(iv)[dv]
+                if len(grps) == 2:
+                    g_names = list(grps.groups.keys())
+                    t_stat, p = stats.ttest_ind(grps.get_group(g_names[0]).dropna(), grps.get_group(g_names[1]).dropna())
+                    df_val = len(df[dv].dropna()) - 2
                     
-                    # הצגת טבלה
-                    summary = temp_df.groupby(group_col)['Improvement'].agg(['mean', 'std', 'count']).reset_index()
-                    st.write("### 📊 ממוצעי שיפור")
-                    st.table(summary.style.format({'mean': "{:.2f}", 'std': "{:.2f}"}))
+                    # טבלת SPSS: Independent Samples Test
+                    t_res = pd.DataFrame({
+                        "t": [t_stat], "df": [df_val], "Sig. (2-tailed)": [p],
+                        "Mean Difference": [grps.get_group(g_names[0]).mean() - grps.get_group(g_names[1]).mean()]
+                    }, index=["Equal variances assumed"])
                     
-                    # גרף
-                    plot_df = temp_df.groupby(group_col)[[pre_col, post_col]].mean().reset_index()
-                    plot_df = plot_df.melt(id_vars=group_col, var_name='Time', value_name='Score')
-                    fig = px.line(plot_df, x='Time', y='Score', color=group_col, markers=True)
-                    st.plotly_chart(fig, use_container_width=True)
-                    
-                    st.session_state['last_stat_result'] = f"Improvement analysis on {group_col} was performed."
-                except Exception as e:
-                    st.error(f"שגיאה: {e}")
+                    st.write("### Independent Samples Test")
+                    st.table(t_res.style.format("{:.3f}"))
+                    analysis_summary = f"t-test between {g_names}: t={t_stat:.2f}, p={p:.4f}"
+                else: st.error("המשתנה חייב להכיל 2 קבוצות בדיוק (למשל: בנים/בנות)")
 
-    # --- אפשרות 2: Two-Way ANOVA ---
+    # --- 2. Correlations (SPSS Format) ---
+    elif "Correlations" in test:
+        with col_setup:
+            vars_corr = st.multiselect("בחר משתנים למטריצה:", numeric)
+            run = st.button("צור מטריצה")
+        with col_results:
+            if run and len(vars_corr) > 1:
+                corr_matrix = df[vars_corr].corr()
+                st.write("### Correlations")
+                st.table(corr_matrix.style.format("{:.3f}").background_gradient(cmap='coolwarm', axis=None))
+                analysis_summary = f"Pearson Correlations for {vars_corr}"
+
+    # --- 3. Linear Regression (SPSS Format) ---
+    elif "Regression" in test:
+        with col_setup:
+            y = st.selectbox("Dependent Variable:", numeric)
+            x = st.multiselect("Independent(s):", numeric)
+            run = st.button("הרץ רגרסיה")
+        with col_results:
+            if run and x:
+                X = sm.add_constant(df[x])
+                model = sm.OLS(df[y], X, missing='drop').fit()
+                
+                # טבלת Coefficients (סגנון SPSS)
+                coef_df = pd.DataFrame({
+                    "B": model.params,
+                    "Std. Error": model.bse,
+                    "t": model.tvalues,
+                    "Sig.": model.pvalues
+                })
+                st.write("### Coefficients")
+                st.table(coef_df.style.format("{:.3f}"))
+                st.write(f"**Model Summary: R Square = {model.rsquared:.3f}**")
+                analysis_summary = f"Regression on {y}: R2={model.rsquared:.3f}"
+
+    # --- 4. Reliability (SPSS Format) ---
+    elif "Reliability" in test:
+        with col_setup:
+            items = st.multiselect("בחר פריטים:", numeric)
+            run = st.button("חשב Alpha")
+        with col_results:
+            if run and len(items) > 1:
+                idat = df[items].dropna()
+                alpha = (len(items)/(len(items)-1)) * (1 - idat.var().sum() / idat.sum(axis=1).var())
+                
+                # טבלת SPSS: Reliability Statistics
+                rel_tab = pd.DataFrame({"Cronbach's Alpha": [alpha], "N of Items": [len(items)]})
+                st.write("### Reliability Statistics")
+                st.table(rel_tab.style.format({"Cronbach's Alpha": "{:.3f}", "N of Items": "{:.0f}"}))
+                analysis_summary = f"Reliability: Alpha={alpha:.3f}"
+
+    # --- 5. Two-Way ANOVA (SPSS Format) ---
     elif "Two-Way ANOVA" in test:
         with col_setup:
-            st.subheader("⚙️ הגדרות ANOVA")
-            f1 = st.selectbox("גורם א' (Major):", all_cols, key="anova_f1")
-            f2 = st.selectbox("גורם ב':", all_cols, key="anova_f2")
-            dv = st.selectbox("משתנה תלוי:", numeric, key="anova_dv")
-            run_anova = st.button("▶️ הרץ ANOVA", use_container_width=True, key="btn_anova")
-
+            f1, f2, dv = st.selectbox("גורם 1:", all_cols), st.selectbox("גורם 2:", all_cols), st.selectbox("תלוי:", numeric)
+            run = st.button("הרץ ANOVA")
         with col_results:
-            if run_anova:
-                try:
-                    formula = f'Q("{dv}") ~ C(Q("{f1}")) * C(Q("{f2}"))'
-                    model = ols(formula, data=df).fit()
-                    table = sm.stats.anova_lm(model, typ=2)
-                    st.write("### 📋 טבלת ANOVA")
-                    st.dataframe(table.style.format("{:.4f}"))
-                    
-                    st.session_state['last_stat_result'] = f"Two-way ANOVA results for {dv} by {f1} and {f2}."
-                except Exception as e:
-                    st.error(f"שגיאה: {e}")
+            if run:
+                model = ols(f'Q("{dv}") ~ C(Q("{f1}")) * C(Q("{f2}"))', data=df).fit()
+                res = sm.stats.anova_lm(model, typ=2)
+                res['Mean Square'] = res['sum_sq'] / res['df']
+                res = res[['sum_sq', 'df', 'Mean Square', 'F', 'PR(>F)']]
+                res.columns = ['Sum of Squares', 'df', 'Mean Square', 'F', 'Sig.']
+                st.write("### Tests of Between-Subjects Effects")
+                st.table(res.style.format("{:.3f}"))
+                analysis_summary = f"ANOVA for {dv} by {f1},{f2}"
 
-    # --- חלק הצ'אט (מופיע רק אם יש תוצאות) ---
+    # --- צ'אט ---
+    if analysis_summary:
+        st.session_state['last_stat_result'] = analysis_summary
     if 'last_stat_result' in st.session_state:
         render_chat_interface(st.session_state['last_stat_result'])
 
-def render_chat_interface(stat_context):
+def render_chat_interface(context):
     st.divider()
-    st.subheader("🤖 צ'אט פירוש תוצאות")
-    
-    if "chat_history" not in st.session_state:
-        st.session_state.chat_history = []
-
-    for message in st.session_state.chat_history:
-        with st.chat_message(message["role"]):
-            st.markdown(message["content"])
-
-    if prompt := st.chat_input("שאל אותי משהו על הממצאים..."):
-        st.session_state.chat_history.append({"role": "user", "content": prompt})
-        with st.chat_message("user"):
-            st.markdown(prompt)
-
+    st.subheader("🤖 צ'אט פירוש ממצאים")
+    if "messages" not in st.session_state: st.session_state.messages = []
+    for m in st.session_state.messages:
+        with st.chat_message(m["role"]): st.markdown(m["content"])
+    if p := st.chat_input("שאל על התוצאות..."):
+        st.session_state.messages.append({"role": "user", "content": p})
+        with st.chat_message("user"): st.markdown(p)
         with st.chat_message("assistant"):
             try:
-                # שימוש במודל 2.0 החדש
                 model = genai.GenerativeModel('gemini-2.0-flash')
-                response = model.generate_content(f"Context: {stat_context}. History: {st.session_state.chat_history}. User: {prompt}")
-                st.markdown(response.text)
-                st.session_state.chat_history.append({"role": "assistant", "content": response.text})
-            except Exception as e:
-                st.error(f"שגיאת AI: {e}")
+                resp = model.generate_content(f"Analyze Context: {context}. User: {p}. Answer in Hebrew.")
+                st.markdown(resp.text)
+                st.session_state.messages.append({"role": "assistant", "content": resp.text})
+            except Exception as e: st.error(f"AI Error: {e}")
