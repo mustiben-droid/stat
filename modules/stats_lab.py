@@ -86,7 +86,7 @@ def render_chat_interface(stat_context):
 
         with st.chat_message("assistant"):
             try:
-                model = genai.GenerativeModel('gemini-1.5-flash')
+                model = genai.GenerativeModel('gemini-2.0-flash')
                 full_context = f"הסטודנט ניתח נתונים. תוצאות ה-ANOVA: {stat_context}. היסטוריית שיחה: {st.session_state.chat_history}. שאלה נוכחית: {prompt}"
                 response = model.generate_content(full_context)
                 st.markdown(response.text)
