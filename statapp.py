@@ -1,6 +1,5 @@
 import streamlit as st
 import pandas as pd
-import logic
 import visuals
 import ai_engine
 import google.generativeai as genai
@@ -21,61 +20,69 @@ st.write("העלה קובץ אקסל וקבל ניתוחים ותובנות AI")
 uploaded_file = st.sidebar.file_uploader("העלה קובץ אקסל (XLSX)", type=["xlsx"])
 
 if uploaded_file:
-    df = pd.read_excel(uploaded_file)
+    # טעינת האקסל תוך התעלמות משורה 1 (שורת הציונים של ה-Q)
+    # הערה: skiprows=[0] מדלג על השורה הראשונה של הנתונים
+    df = pd.read_excel(uploaded_file, skiprows=[0])
     
-    # ניסיון המרה אוטומטי ראשוני
+    # תיקון שמות עמודות כפולים או ריקים (מונע DuplicateError)
+    new_columns = []
+    for i, col in enumerate(df.columns):
+        clean_name = str(col).strip()
+        if clean_name == "" or "Unnamed" in clean_name:
+            new_columns.append(f"Column_{i}")
+        else:
+            new_columns.append(clean_name)
+    df.columns = new_columns
+
+    # ניסיון המרה אוטומטי למספרים
     for col in df.columns:
         df[col] = pd.to_numeric(df[col], errors='ignore')
 
-    st.success("הקובץ נטען בהצלחה!")
+    st.success("הקובץ נטען בהצלחה (דילגנו על שורת הציונים)")
 
-    # --- ה-Variable View שלכם (כמו ב-SPSS) ---
-    st.sidebar.header("⚙️ Variable View (הגדרת משתנים)")
-    
+    # --- Variable View (כמו ב-SPSS) בתוך Sidebar ---
+    st.sidebar.header("⚙️ Variable View")
     column_types = {}
+    
     for col in df.columns:
-        # זיהוי אוטומטי ראשוני להמלצה
-        default_type = "Scale (Numeric)" if pd.api.types.is_numeric_dtype(df[col]) else "Nominal (Text)"
+        # זיהוי אוטומטי: אם זה מספר, נציע Scale
+        is_num = pd.api.types.is_numeric_dtype(df[col])
+        default_idx = 0 if is_num else 1
         
-        # בחירת סוג המשתנה לכל עמודה
         column_types[col] = st.sidebar.selectbox(
-            f"סוג המשתנה עבור {col}:",
+            f"הגדר משתנה: {col}",
             options=["Scale (Numeric)", "Nominal (Text)"],
-            index=0 if default_type == "Scale (Numeric)" else 1,
+            index=default_idx,
             key=f"type_{col}"
         )
 
-    # החלת השינויים על ה-DataFrame
+    # החלת סוגי הנתונים לפי בחירת המשתמש
     for col, v_type in column_types.items():
         if v_type == "Nominal (Text)":
             df[col] = df[col].astype(str)
         else:
-            # ניסיון להפוך חזרה למספר אם המשתמש התחרט
             df[col] = pd.to_numeric(df[col], errors='coerce')
 
-    # יצירת DataFrame מסונן לחישובים (רק מה שהוגדר כ-Scale)
+    # סינון דאטה-פריים רק למספרים לצורך סטטיסטיקה תיאורית
     numeric_only_df = df.select_dtypes(include=['number'])
     
     # --- תצוגת הטאבים ---
     tab1, tab2, tab3 = st.tabs(["📋 נתונים", "📈 גרפים", "🤖 Gemini AI"])
     
     with tab1:
-        st.subheader("סטטיסטיקה תיאורית (מספרי בלבד)")
+        st.subheader("סטטיסטיקה תיאורית (Scale בלבד)")
         if not numeric_only_df.empty:
             st.write(numeric_only_df.describe())
         else:
-            st.warning("לא נמצאו עמודות מספריות להצגת סטטיסטיקה.")
+            st.warning("לא הוגדרו עמודות כ-Scale.")
         
-        st.subheader("מבט על הטבלה")
+        st.subheader("מבט על הנתונים")
         st.write(df.head())
 
     with tab2:
-        # הפונקציה ב-visuals כבר תדע לסנן רק את המספריות שנשארו
         visuals.render_visuals(df)
         
     with tab3:
         ai_engine.render_ai_analysis(df)
 else:
-    st.info("ממתין להעלאת קובץ...")
-
-
+    st.info("ממתין להעלאת קובץ אקסל...")
