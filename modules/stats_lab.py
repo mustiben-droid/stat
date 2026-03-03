@@ -3,118 +3,124 @@ import pandas as pd
 import numpy as np
 import scipy.stats as stats
 import plotly.express as px
-import google.generativeai as genai
 import statsmodels.api as sm
 from statsmodels.formula.api import ols
 
 def render_stats_lab(df: pd.DataFrame):
-    st.header("🔬 מעבדת סטטיסטיקה מתקדמת - Full Report Mode")
+    # שינוי השם לבקשתך
+    st.header("🔬 Statistic Analyzer")
     
+    # ניקוי בסיסי של שמות העמודות
     df.columns = df.columns.str.strip()
     numeric = df.select_dtypes(include=["number"]).columns.tolist()
     all_cols = df.columns.tolist()
 
-    # תפריט ה-Analyze המקצועי
-    test = st.selectbox("בחר ניתוח (Analyze):", [
-        "📊 Repeated Measures ANOVA (Pre vs Post Analysis)",
-        "🧪 מבחן t למדגמים בלתי תלויים",
-        "🔲 מבחן Chi-Square (קשר בין קטגוריות)",
-        "🛡️ בדיקת מהימנות (Cronbach's Alpha)",
-        "📈 מטריצת מתאמים וסטטיסטיקה תיאורית"
+    # תפריט ניתוחים ראשי (Sidebar)
+    analysis_type = st.sidebar.radio("Analysis Menu", [
+        "📊 Descriptives",
+        "📈 ANOVA (Repeated Measures)",
+        "🧪 T-Tests",
+        "🔲 Frequencies (Chi-Square)",
+        "🔗 Regression & Correlation"
     ])
 
     st.divider()
-    col_setup, col_results = st.columns([1, 2.5], gap="large")
-    analysis_summary = ""
 
-    # --- 1. REPEATED MEASURES ANOVA - הגרסה המורחבת ---
-    if "Repeated Measures" in test:
+    # --- 1. DESCRIPTIVES (כולל SE ו-CV) ---
+    if analysis_type == "📊 Descriptives":
+        col1, col2 = st.columns([1, 2])
+        with col1:
+            vars_to_analyze = st.multiselect("Variables", numeric)
+            split_by = st.selectbox("Split by (Grouping Variable)", ["None"] + all_cols)
+            st.subheader("Options")
+            show_se = st.checkbox("Std. error mean", value=True)
+            show_cv = st.checkbox("Coefficient of variation", value=True)
+        
+        with col2:
+            if vars_to_analyze:
+                st.write("### Descriptive Statistics")
+                if split_by == "None":
+                    res = df[vars_to_analyze].agg(['count', 'mean', 'std', 'min', 'max']).T
+                else:
+                    res = df.groupby(split_by)[vars_to_analyze].agg(['count', 'mean', 'std']).stack(level=0)
+                
+                if show_se:
+                    res['SE'] = res['std'] / np.sqrt(res['count'])
+                if show_cv:
+                    res['CV'] = res['std'] / res['mean']
+                
+                st.table(res.style.format("{:.3f}"))
+
+    # --- 2. REPEATED MEASURES ANOVA (הפלט המלא שביקשת) ---
+    elif analysis_type == "📈 ANOVA (Repeated Measures)":
+        col_setup, col_out = st.columns([1, 2])
         with col_setup:
-            st.subheader("⚙️ נתוני ANOVA")
-            pre = st.selectbox("זמן 1 (Pre):", numeric, key="rm_pre")
-            post = st.selectbox("זמן 2 (Post):", numeric, key="rm_post")
-            between = st.selectbox("גורם בין-נבדקי (Major):", all_cols, key="rm_btw")
-            st.info("הניתוח כולל: ממוצעים, מובהקות, וגודל אפקט (Eta Squared).")
-            run = st.button("🚀 Run Analysis", use_container_width=True)
+            levels = st.multiselect("RM Factors (Levels)", numeric, help="Select levels in order (e.g., Level 1, 2, 3)")
+            between_subject = st.selectbox("Between Subjects Factor (Major)", all_cols)
+            
+            st.subheader("Options")
+            display_plots = st.checkbox("Descriptive plots", value=True)
+            est_effect_size = st.checkbox("Estimates of effect size (η²p)", value=True)
+            simple_main = st.checkbox("Simple main effects", value=True)
 
-        with col_results:
-            if run:
+        with col_out:
+            if len(levels) > 1:
                 try:
-                    # עיבוד נתונים לפורמט ארוך
-                    temp_df = df[[pre, post, between]].dropna().copy()
+                    # הכנת נתונים לפורמט ארוך
+                    temp_df = df[levels + [between_subject]].dropna().copy()
                     temp_df['ID'] = range(len(temp_df))
-                    long_df = pd.melt(temp_df, id_vars=['ID', between], value_vars=[pre, post], 
+                    long_df = pd.melt(temp_df, id_vars=['ID', between_subject], value_vars=levels, 
                                      var_name='Time', value_name='Score')
-                    
-                    # 1. טבלת ממוצעים (Descriptive Statistics)
-                    st.write("### Descriptive Statistics")
-                    desc = temp_df.groupby(between)[[pre, post]].agg(['mean', 'std', 'count'])
-                    st.table(desc.style.format("{:.2f}"))
+                    long_df['Time'] = pd.Categorical(long_df['Time'], categories=levels, ordered=True)
 
-                    # 2. הרצת המודל הסטטיסטי
-                    model = ols(f'Score ~ C(Time) * C(Q("{between}"))', data=long_df).fit()
-                    anova_table = sm.stats.anova_lm(model, typ=2)
+                    # א. טבלת ANOVA (Within-Subjects)
+                    st.write("### Tests of Within-Subjects Effects")
+                    model = ols(f'Score ~ C(Time) * C(Q("{between_subject}"))', data=long_df).fit()
+                    anova_table = sm.stats.anova_lm(model, typ=3) # Type III SS כמקובל ב-JASP
                     
-                    # חישוב Eta Squared (גודל אפקט)
-                    anova_table['Eta2'] = anova_table['sum_sq'] / (anova_table['sum_sq'].sum())
-                    anova_table.columns = ['Sum of Squares', 'df', 'F', 'Sig.', 'Eta^2']
-                    
-                    # 3. תצוגת תוצאות ANOVA
-                    st.write("### ANOVA Table (Within & Between Effects)")
-                    st.table(anova_table.style.format("{:.3f}"))
+                    # הוספת Mean Square ו-Eta Squared
+                    anova_table['Mean Square'] = anova_table['sum_sq'] / anova_table['df']
+                    if est_effect_size:
+                        ss_resid = anova_table.loc['Residual', 'sum_sq']
+                        anova_table['η²p'] = anova_table['sum_sq'] / (anova_table['sum_sq'] + ss_resid)
+                        anova_table.at['Residual', 'η²p'] = np.nan
 
-                    # 4. גרף אינטראקציה (Interaction Plot)
-                    st.write("### Descriptives Plot")
-                    plot_data = long_df.groupby(['Time', between])['Score'].mean().reset_index()
-                    fig = px.line(plot_data, x='Time', y='Score', color=between, markers=True, 
-                                 line_shape='linear', template="plotly_white")
-                    st.plotly_chart(fig, use_container_width=True)
-                    
-                    analysis_summary = f"RM ANOVA Results for {between}. Time p={anova_table.iloc[0,3]:.4f}, Interaction p={anova_table.iloc[2,3]:.4f}"
+                    # עיצוב הטבלה (צביעת ערכי p מובהקים)
+                    st.table(anova_table.style.format("{:.3f}").highlight_between(subset=['PR(>F)'], left=0, right=0.05, color='#ffcccc'))
+
+                    # ב. Simple Main Effects (לפי כל רמה בנפרד)
+                    if simple_main:
+                        st.write("### Simple Main Effects")
+                        sme_res = []
+                        for lvl in levels:
+                            m = ols(f'Q("{lvl}") ~ C(Q("{between_subject}"))', data=temp_df).fit()
+                            a = sm.stats.anova_lm(m, typ=3)
+                            sme_res.append({
+                                "Level of Factor": lvl, 
+                                "Sum of Squares": a.iloc[1,0],
+                                "df": a.iloc[1,1],
+                                "F": a.iloc[1,2], 
+                                "p": a.iloc[1,3]
+                            })
+                        st.table(pd.DataFrame(sme_res).style.format({"Sum of Squares": "{:.3f}", "F": "{:.3f}", "p": "{:.4f}"}))
+
+                    # ג. גרפים (Plots)
+                    if display_plots:
+                        st.write("### Descriptives Plots")
+                        plot_data = long_df.groupby(['Time', between_subject], observed=True)['Score'].mean().reset_index()
+                        fig = px.line(plot_data, x='Time', y='Score', color=between_subject, markers=True, template="plotly_white")
+                        st.plotly_chart(fig)
+
                 except Exception as e:
-                    st.error(f"Error: {e}")
+                    st.error(f"Error during ANOVA calculation: {e}")
 
-    # --- 2. מבחני T ומבחנים אחרים עם דו"ח מלא ---
-    elif "t למדגמים בלתי תלויים" in test:
-        with col_setup:
-            dv = st.selectbox("משתנה תלוי:", numeric)
-            iv = st.selectbox("משתנה בלתי תלוי (2 קבוצות):", all_cols)
-            run = st.button("🚀 Run T-test")
-        with col_results:
-            if run:
-                groups = [g[dv].dropna() for _, g in df.groupby(iv)]
-                if len(groups) == 2:
-                    # סטטיסטיקה תיאורית לקבוצות
-                    st.write("### Group Statistics")
-                    st.table(df.groupby(iv)[dv].agg(['count', 'mean', 'std']))
-                    
-                    # המבחן עצמו
-                    t_stat, p = stats.ttest_ind(groups[0], groups[1])
-                    st.write("### Independent Samples Test")
-                    st.metric("Sig. (2-tailed)", f"{p:.4f}", delta="מובהק" if p < 0.05 else "לא מובהק")
-                    st.write(f"t-value: {t_stat:.3f}")
-                else: st.error("חייב 2 קבוצות בדיוק.")
-
-    # (מקום למבחנים נוספים באותו פורמט עשיר)
-
-    if analysis_summary:
-        st.session_state['last_stat_result'] = analysis_summary
-    if 'last_stat_result' in st.session_state:
-        render_chat_interface(st.session_state['last_stat_result'])
-
-def render_chat_interface(context):
-    st.divider()
-    st.subheader("🤖 צ'אט פירוש הממצאים (SPSS Mentor)")
-    if "messages" not in st.session_state: st.session_state.messages = []
-    for m in st.session_state.messages:
-        with st.chat_message(m["role"]): st.markdown(m["content"])
-    if p := st.chat_input("שאל אותי על ה-Eta Squared או על האינטראקציה..."):
-        st.session_state.messages.append({"role": "user", "content": p})
-        with st.chat_message("user"): st.markdown(p)
-        with st.chat_message("assistant"):
-            try:
-                model = genai.GenerativeModel('gemini-1.5-flash')
-                resp = model.generate_content(f"Analyze Context: {context}. User: {p}. Answer in Hebrew as a statistics professor.")
-                st.markdown(resp.text)
-                st.session_state.messages.append({"role": "assistant", "content": resp.text})
-            except Exception as e: st.error(f"AI Error: {e}")
+    # --- 3. CHI-SQUARE ---
+    elif analysis_type == "🔲 Frequencies (Chi-Square)":
+        v1 = st.selectbox("Rows (Variable 1)", all_cols)
+        v2 = st.selectbox("Columns (Variable 2)", all_cols)
+        if st.button("Run Contingency Table"):
+            ct = pd.crosstab(df[v1], df[v2])
+            st.write("### Contingency Table")
+            st.table(ct)
+            chi2, p, _, _ = stats.chi2_contingency(ct)
+            st.metric("Pearson Chi-Square Sig.", f"{p:.4f}")
