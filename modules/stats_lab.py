@@ -15,8 +15,13 @@ from .utils import (
 def render_stats_lab(df: pd.DataFrame):
     st.header("🔬 המעבדה הסטטיסטית (StatsMonster Pro)")
     
-    numeric = df.select_dtypes(include="number").columns.tolist()
-    all_cols = df.columns.tolist()
+    # בתוך render_stats_lab
+numeric = df.select_dtypes(include="number").columns.tolist() # רק מספרים
+all_cols = df.columns.tolist() # כל העמודות (כולל Major)
+
+# ב-ANOVA למשל:
+gv = st.selectbox("משתנה קטגוריאלי (IV):", all_cols) # כאן Major חייב להופיע
+dv = st.selectbox("משתנה תלוי (DV):", numeric)       # כאן Major לא יופיע כי הוא טקסט
 
     test = st.selectbox("בחר מבחן סטטיסטי:", [
         "📈 ניתוח שונות חד-כיווני (One-Way ANOVA)",
