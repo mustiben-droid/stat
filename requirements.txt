@@ -3,4 +3,5 @@ pandas
 plotly
 scipy
 openpyxl
+statsmodels
 google-generativeai
