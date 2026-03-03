@@ -124,3 +124,35 @@ def render_stats_lab(df: pd.DataFrame):
             st.table(ct)
             chi2, p, _, _ = stats.chi2_contingency(ct)
             st.metric("Pearson Chi-Square Sig.", f"{p:.4f}")
+
+# בתוך פונקציית render_chat_interface או בסוף render_stats_lab:
+
+if prompt := st.chat_input("שאל אותי על תוצאות הניתוח..."):
+    st.session_state.messages.append({"role": "user", "content": prompt})
+    with st.chat_message("user"):
+        st.markdown(prompt)
+
+    with st.chat_message("assistant"):
+        try:
+            # עדכון המודל לגרסה החדשה ביותר
+            model = genai.GenerativeModel('gemini-2-flash') 
+            
+            # שליפת ההקשר הסטטיסטי האחרון מה-ANOVA או מה-Descriptives
+            context = st.session_state.get('last_context', "No analysis run yet.")
+            
+            full_prompt = f"""
+            Context: {context}
+            User Question: {prompt}
+            Instructions: You are a senior statistical consultant. 
+            Analyze the data provided in the context. 
+            Answer in Hebrew. 
+            If there is a decline (נסיגה), point it out specifically.
+            """
+            
+            response = model.generate_content(full_prompt)
+            st.markdown(response.text)
+            st.session_state.messages.append({"role": "assistant", "content": response.text})
+            
+        except Exception as e:
+            # אם ה-API עדיין לא מעודכן ל-3 בסביבה שלך, הוא יחזור ל-1.5 אוטומטית כדי לא לקרוס
+            st.error(f"Error: {e}")
