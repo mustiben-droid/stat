@@ -4,6 +4,7 @@ import numpy as np
 import os
 import google.generativeai as genai
 from modules.stats_lab import render_stats_lab
+from ai_engine import render_ai_engine
 
 st.set_page_config(page_title="Statistical Monster", layout="wide")
 
@@ -45,3 +46,4 @@ if uploaded_file:
     tab_stats, tab_ai = st.tabs(["🔬 מעבדה סטטיסטית", "🤖 Gemini AI"])
     with tab_stats:
         render_stats_lab(df)
+
