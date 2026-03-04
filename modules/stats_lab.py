@@ -3,120 +3,117 @@ import pandas as pd
 import numpy as np
 import scipy.stats as stats
 import plotly.express as px
+import plotly.graph_objects as go
 import statsmodels.api as sm
-from statsmodels.formula.api import ols, logit
+from statsmodels.formula.api import ols
 import google.generativeai as genai
 
 def render_stats_lab(df: pd.DataFrame):
-    st.header("🔬 Gemini Stat-Lab Pro: Full Academic Suite")
+    st.markdown("""<style> .main { background-color: #f5f7f9; } .stTable { background-color: white; border-radius: 5px; } </style>""", unsafe_allow_html=True)
     
-    # ניקוי וזיהוי עמודות
+    # הכנת נתונים
     df.columns = df.columns.str.strip()
     all_cols = df.columns.tolist()
     numeric_cols = df.select_dtypes(include=[np.number]).columns.tolist()
 
-    # --- תפריט ניתוחים מורחב ---
-    analysis_type = st.sidebar.radio("בחר קטגוריית ניתוח:", [
-        "📊 Descriptives",
-        "📈 ANOVA & Simple Effects",
-        "📉 Regressions",
-        "🛡️ Reliability (Alpha & Scales)",
-        "🔗 Correlations (Pearson/Spearman)",
-        "🧪 T-Tests"
-    ])
-
-    st.divider()
-    col_stats, col_ai = st.columns([0.7, 0.3])
-
-    with col_stats:
-        # --- 1. רגרסיות (Regressions) ---
-        if analysis_type == "📉 Regressions":
-            reg_type = st.selectbox("סוג רגרסיה:", ["Linear Regression", "Logistic Regression"])
-            dv = st.selectbox("משתנה תלוי (Y):", numeric_cols)
-            ivs = st.multiselect("משתנים בלתי תלויים (X):", numeric_cols + all_cols)
-            
-            if st.button("Run Regression") and ivs:
-                try:
-                    X = df[ivs].copy()
-                    # טיפול במשתנים קטגוריאליים (כמו Major) באופן אוטומטי
-                    X = pd.get_dummies(X, drop_first=True)
-                    X = sm.add_constant(X)
-                    y = df[dv]
-                    
-                    if reg_type == "Linear Regression":
-                        model = sm.OLS(y, X, missing='drop').fit()
-                    else:
-                        model = sm.Logit(y, X, missing='drop').fit()
-                    
-                    st.write(model.summary())
-                    st.session_state['last_res'] = f"{reg_type} results: R-squared={model.rsquared if reg_type=='Linear Regression' else 'N/A'}"
-                except Exception as e:
-                    st.error(f"Error in Regression: {e}")
-
-        # --- 2. מתאמים (Correlations) ---
-        elif analysis_type == "🔗 Correlations (Pearson/Spearman)":
-            method = st.radio("שיטת מתאם:", ["pearson", "spearman"])
-            vars_c = st.multiselect("בחר משתנים למטריצה:", numeric_cols)
-            if vars_c:
-                corr_matrix = df[vars_c].corr(method=method)
-                st.write(f"### {method.capitalize()} Correlation Matrix")
-                st.table(corr_matrix.style.background_gradient(cmap='coolwarm').format("{:.3f}"))
-                st.session_state['last_res'] = f"{method} correlations for {vars_c}"
-
-        # --- 3. אמינות (Reliability) ---
-        elif analysis_type == "🛡️ Reliability (Alpha & Scales)":
-            items = st.multiselect("Scale Items (מספרי בלבד):", numeric_cols)
-            if st.button("Compute Cronbach's Alpha") and len(items) > 1:
-                idat = df[items].dropna()
-                k = len(items)
-                alpha = (k/(k-1)) * (1 - idat.var().sum() / idat.sum(axis=1).var())
-                st.metric("Cronbach's Alpha (α)", f"{alpha:.3f}")
-                # הוספת המלצה לפי הערך
-                if alpha < 0.7: st.warning("אמינות נמוכה (מתחת ל-0.7)")
-                else: st.success("אמינות טובה")
-                st.session_state['last_res'] = f"Alpha for {items}: {alpha:.3f}"
-
-        # --- 4. ANOVA & Simple Effects ---
-        elif analysis_type == "📈 ANOVA & Simple Effects":
-            sub_type = st.radio("תת-ניתוח:", ["Repeated Measures ANOVA", "Simple Main Effects"])
-            if sub_type == "Repeated Measures ANOVA":
-                levels = st.multiselect("Time Points:", numeric_cols)
-                between = st.selectbox("Between-Subject (Major):", all_cols)
-                if st.button("Run ANOVA") and len(levels) > 1:
-                    tdf = df[levels + [between]].dropna().copy()
-                    tdf['ID'] = range(len(tdf))
-                    long_df = pd.melt(tdf, id_vars=['ID', between], value_vars=levels, var_name='Time', value_name='Score')
-                    model = ols(f'Score ~ C(Time) * C(Q("{between}"))', data=long_df).fit()
-                    res = sm.stats.anova_lm(model, typ=3)
-                    st.table(res.style.format("{:.3f}"))
-            else:
-                t_var = st.selectbox("Time Point:", numeric_cols)
-                g_var = st.selectbox("Group (Major):", all_cols)
-                if st.button("Run Simple Effect"):
-                    model = ols(f'Q("{t_var}") ~ C(Q("{g_var}"))', data=df).fit()
-                    st.table(sm.stats.anova_lm(model, typ=3).style.format("{:.3f}"))
-
-    # --- טור הצ'אט של ג'ימיני ---
-    with col_ai:
-        render_ai_sidebar()
-
-def render_ai_sidebar():
-    st.subheader("🤖 AI Consultant")
-    if "messages" not in st.session_state: st.session_state.messages = []
+    st.title("🔬 Gemini Academic Stat-Suite")
     
-    chat_container = st.container(height=500)
-    with chat_container:
-        for m in st.session_state.messages:
-            with st.chat_message(m["role"]): st.markdown(m["content"])
+    # סרגל כלים עליון סטייל SPSS
+    menu = st.tabs(["📉 רגרסיות ומתאמים", "📈 ניתוח שונות (ANOVA)", "🛡️ אמינות ומדידה", "📊 תיאוריים"])
 
-    if prompt := st.chat_input("שאל את ג'ימיני..."):
-        st.session_state.messages.append({"role": "user", "content": prompt})
-        with chat_container: st.chat_message("user").markdown(prompt)
-        
+    # --- טור AI צדדי קבוע ---
+    col_main, col_ai = st.columns([0.7, 0.3])
+
+    with col_main:
+        # --- TAB 1: REGRESSIONS & CORRELATIONS ---
+        with menu[0]:
+            c1, c2 = st.columns([1, 2])
+            with c1:
+                st.subheader("הגדרות מבחן")
+                m_type = st.radio("סוג מתאם/רגרסיה:", ["Pearson Correlation", "Spearman Rank", "Linear Regression"])
+                vars_sel = st.multiselect("בחר משתנים:", numeric_cols)
+                
+                st.write("---")
+                st.caption("אפשרויות נוספות:")
+                show_scatter = st.checkbox("הצג דיאגרמת פיזור", value=True)
+                show_coeffs = st.checkbox("הצג מקדמי רגרסיה (B, Beta)", value=True)
+
+            with c2:
+                if vars_sel:
+                    if "Correlation" in m_type:
+                        meth = "pearson" if "Pearson" in m_type else "spearman"
+                        res = df[vars_sel].corr(method=meth)
+                        st.write(f"### Matrix: {m_type}")
+                        st.table(res.style.background_gradient(cmap='RdBu_r', axis=None).format("{:.3f}"))
+                        if show_scatter and len(vars_sel) >= 2:
+                            fig = px.scatter_matrix(df[vars_sel], height=400, template="plotly_white")
+                            st.plotly_chart(fig)
+                    
+                    elif m_type == "Linear Regression" and len(vars_sel) >= 2:
+                        y = df[vars_sel[0]]
+                        X = sm.add_constant(df[vars_sel[1:]])
+                        model = sm.OLS(y, X, missing='drop').fit()
+                        st.write("### Model Summary (SPSS Style)")
+                        st.text(model.summary2().as_text()) # פורמט טקסטואלי מקצועי
+
+        # --- TAB 2: ANOVA & SIMPLE EFFECTS ---
+        with menu[1]:
+            st.subheader("Repeated Measures & Interaction")
+            a1, a2 = st.columns([1, 2])
+            with a1:
+                dv_levels = st.multiselect("רמות זמן (Dependent):", numeric_cols, key="anova_dv")
+                bs_factor = st.selectbox("גורם בין-נבדקי (Major):", all_cols, key="anova_bs")
+                st.write("---")
+                show_desc = st.checkbox("Descriptive Statistics", value=True)
+                show_interaction = st.checkbox("Interaction Plot", value=True)
+            
+            with a2:
+                if dv_levels and bs_factor and st.button("Execute ANOVA"):
+                    # לוגיקת ANOVA מורחבת
+                    tdf = df[dv_levels + [bs_factor]].dropna()
+                    tdf['ID'] = range(len(tdf))
+                    long = pd.melt(tdf, id_vars=['ID', bs_factor], value_vars=dv_levels, var_name='Time', value_name='Score')
+                    long['Time'] = pd.Categorical(long['Time'], categories=dv_levels, ordered=True)
+                    model = ols(f'Score ~ C(Time) * C(Q("{bs_factor}"))', data=long).fit()
+                    table = sm.stats.anova_lm(model, typ=3)
+                    st.table(table.style.format("{:.3f}"))
+                    
+                    if show_interaction:
+                        
+                        fig = px.line(long.groupby(['Time', bs_factor], observed=True)['Score'].mean().reset_index(), 
+                                     x='Time', y='Score', color=bs_factor, markers=True)
+                        st.plotly_chart(fig)
+
+        # --- TAB 3: RELIABILITY ---
+        with menu[2]:
+            st.subheader("Scale Reliability Analysis")
+            r1, r2 = st.columns([1, 2])
+            with r1:
+                items = st.multiselect("Items for Alpha:", numeric_cols, key="rel_items")
+                st.checkbox("Item-Total Statistics")
+                st.checkbox("Alpha if Item Deleted")
+            with r2:
+                if len(items) > 1:
+                    idat = df[items].dropna()
+                    k = len(items)
+                    alpha = (k/(k-1)) * (1 - idat.var().sum() / idat.sum(axis=1).var())
+                    st.metric("Cronbach's Alpha (α)", f"{alpha:.3f}")
+                    
+
+    # --- עמודת צ'אט (צד שמאל) ---
+    with col_ai:
+        st.subheader("🤖 AI Statistical Consultant")
+        chat_container = st.container(height=600)
         with chat_container:
-            with st.chat_message("assistant"):
+            if "messages" not in st.session_state: st.session_state.messages = []
+            for m in st.session_state.messages:
+                with st.chat_message(m["role"]): st.markdown(m["content"])
+        
+        if prompt := st.chat_input("שאל על התוצאות..."):
+            st.session_state.messages.append({"role": "user", "content": prompt})
+            with chat_container:
+                st.chat_message("user").markdown(prompt)
                 model = genai.GenerativeModel('gemini-2.0-flash')
-                ctx = st.session_state.get('last_res', "No analysis results yet.")
-                resp = model.generate_content(f"Context: {ctx}\nUser: {prompt}\nAnswer in Hebrew as a stats pro.")
-                st.markdown(resp.text)
-                st.session_state.messages.append({"role": "assistant", "content": resp.text})
+                response = model.generate_content(prompt + " (Answer in Hebrew)")
+                st.chat_message("assistant").markdown(response.text)
+                st.session_state.messages.append({"role": "assistant", "content": response.text})
