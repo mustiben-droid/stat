@@ -5,13 +5,17 @@ import pandas as pd
 import re
 
 def render_ai_engine(df):
-    st.markdown("### 🤖 מנוע ניתוח נתונים בזמן אמת")
+    st.markdown("### 🤖 מנוע ניתוח נתונים אוניברסלי")
     
+    if df is None or df.empty:
+        st.error("לא הועלו נתונים לניתוח.")
+        return
+
     if "messages" not in st.session_state:
         st.session_state.messages = []
 
+    # תצוגת הצ'אט
     chat_placeholder = st.container(height=450)
-
     with chat_placeholder:
         for message in st.session_state.messages:
             with st.chat_message(message["role"]):
@@ -19,7 +23,7 @@ def render_ai_engine(df):
                 if "plot" in message and message["plot"] is not None:
                     st.plotly_chart(message["plot"], use_container_width=True)
 
-    if prompt := st.chat_input("למשל: תראה לי שיפור של תלמיד 4"):
+    if prompt := st.chat_input("שאל כל שאלה על הקובץ שהעלית..."):
         st.session_state.messages.append({"role": "user", "content": prompt})
         with chat_placeholder:
             with st.chat_message("user"):
@@ -27,41 +31,59 @@ def render_ai_engine(df):
 
         with chat_placeholder:
             with st.chat_message("assistant"):
-                # --- שלב 1: חילוץ ID וביצוע פילטר (לפני ה-AI) ---
-                fig = None
-                id_match = re.search(r'(\d+)', prompt)
-                
-                if id_match:
-                    sid = int(id_match.group(1))
-                    # סינון אמיתי מהקובץ שלך
-                    student_data = df[df['student_id'].astype(str) == str(sid)].copy()
+                try:
+                    model = genai.GenerativeModel('gemini-2.0-flash')
                     
-                    if not student_data.empty:
-                        # זיהוי עמודת ציון מהשאלה או ברירת מחדל
-                        y_col = next((c for c in df.columns if c in prompt), 'score_spatial')
+                    # --- זה הפרומפט האוניברסלי שמתאים לכל קובץ ---
+                    columns_list = ", ".join(df.columns.tolist())
+                    system_instructions = f"""
+                    You are a professional data analyst. 
+                    Current dataset columns: {columns_list}.
+                    
+                    Your instructions:
+                    1. The data is already loaded in the system. Never tell the user to load it.
+                    2. If the user asks for a specific ID, filter the data by the ID column (e.g., student_id, user_id, etc.).
+                    3. If the user asks for 'improvement' or 'trends', use the date/time column for the X-axis.
+                    4. Analyze the specific columns mentioned in the user's prompt.
+                    5. Answer in HEBREW only, be direct and scientific.
+                    6. Do NOT provide code or instructions. Simply confirm you are performing the analysis.
+                    """
+
+                    response = model.generate_content(f"{system_instructions}\n\nUser Question: {prompt}")
+                    st.markdown(response.text)
+                    
+                    # --- מנגנון ביצוע גרפים אוטומטי ---
+                    fig = None
+                    
+                    # זיהוי מספר (ID) בשאלה
+                    id_match = re.search(r'(\d+)', prompt)
+                    
+                    # חיפוש עמודת מזהה (ID) כלשהי
+                    id_col = next((c for c in df.columns if 'id' in c.lower() or 'key' in c.lower()), df.columns[0])
+                    # חיפוש עמודת זמן כלשהי
+                    date_col = next((c for c in df.columns if 'date' in c.lower() or 'time' in c.lower() or 'תאריך' in c), None)
+                    # חיפוש עמודת ערך (Score/Value) מהשאלה
+                    val_col = next((c for c in df.columns if c.lower() in prompt.lower()), None)
+
+                    if id_match:
+                        target_id = int(id_match.group(1))
+                        # סינון לפי ה-ID שנמצא
+                        filtered_df = df[df[id_col].astype(str) == str(target_id)].copy()
                         
-                        # סידור ציר הזמן
-                        if 'date' in student_data.columns:
-                            student_data['date'] = pd.to_datetime(student_data['date'], dayfirst=True, errors='coerce')
-                            student_data = student_data.sort_values('date')
+                        if not filtered_df.empty and date_col and val_col:
+                            # המרת תאריך לגרף תקין
+                            filtered_df[date_col] = pd.to_datetime(filtered_df[date_col], dayfirst=True, errors='coerce')
+                            filtered_df = filtered_df.sort_values(date_col)
                             
-                            # יצירת הגרף האמיתי מהנתונים
-                            fig = px.line(student_data, x='date', y=y_col, 
-                                         title=f"נתונים אמיתיים: מגמת {y_col} - תלמיד {sid}", 
+                            fig = px.line(filtered_df, x=date_col, y=val_col, 
+                                         title=f"מגמת {val_col} עבור {id_col} {target_id}",
                                          markers=True, template="plotly_white")
                             st.plotly_chart(fig, use_container_width=True)
-                            analysis_text = f"מצאתי את הנתונים עבור תלמיד {sid}. הנה גרף המגמה המבוסס על {len(student_data)} רשומות מהקובץ שלך."
-                    else:
-                        analysis_text = f"חיפשתי את תלמיד {sid} בקובץ, אך לא נמצאו נתונים תואמים."
-                else:
-                    # אם לא צוין ID, ניתן ל-AI לענות תשובה כללית
-                    try:
-                        model = genai.GenerativeModel('gemini-2.0-flash')
-                        context = f"Columns: {list(df.columns)}. Answer in Hebrew."
-                        response = model.generate_content(f"{context}\nQuestion: {prompt}")
-                        analysis_text = response.text
-                    except:
-                        analysis_text = "לא הצלחתי לנתח את הבקשה. נסה לציין מספר תלמיד (למשל: תלמיד 4)."
+                        elif not filtered_df.empty and not date_col:
+                            st.write("הנתונים נמצאו, אך לא זוהתה עמודת תאריך להצגת מגמה.")
+                            st.dataframe(filtered_df.head(10))
 
-                st.markdown(analysis_text)
-                st.session_state.messages.append({"role": "assistant", "content": analysis_text, "plot": fig})
+                    st.session_state.messages.append({"role": "assistant", "content": response.text, "plot": fig})
+                    
+                except Exception as e:
+                    st.error(f"שגיאה בניתוח הנתונים: {e}")
