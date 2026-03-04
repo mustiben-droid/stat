@@ -1,61 +1,116 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
-import os
+import plotly.express as px
 import google.generativeai as genai
-from modules.stats_lab import render_stats_lab
-from ai_engine import render_ai_engine # האימפורט קיים, וזה מצוין
+import re
+import json
+import statsmodels.api as sm
+from statsmodels.formula.api import ols
 
-st.set_page_config(page_title="Statistical Monster", layout="wide")
-
-# הגדרת ה-AI (חשוב להגדיר כאן כדי שהמנוע יעבוד)
-GEMINI_KEY = st.secrets.get("GOOGLE_API_KEY") or os.environ.get("GEMINI_API_KEY", "")
-if GEMINI_KEY:
-    genai.configure(api_key=GEMINI_KEY)
-
-# פונקציה לטעינה חכמה - מזהה לבד איפה הכותרות
-def load_data_smart(file):
-    # קורא את 5 השורות הראשונות לבדיקה
-    test_df = pd.read_excel(file, nrows=5, header=None)
-    header_idx = 0
-    for i, row in test_df.iterrows():
-        # אם יש בשורה יותר טקסט ממספרים, זו כנראה הכותרת
-        if row.apply(lambda x: isinstance(x, str)).sum() > len(test_df.columns) / 2:
-            header_idx = i
-            break
-    file.seek(0)
-    return pd.read_excel(file, header=header_idx)
-
-# מנגנון איפוס בעת החלפת קובץ
-uploaded_file = st.sidebar.file_uploader("העלה אקסל", type=["xlsx"])
-if uploaded_file:
-    if st.session_state.get('last_file') != uploaded_file.name:
-        st.session_state.clear()
-        st.session_state['last_file'] = uploaded_file.name
-        st.rerun()
-
-    df = load_data_smart(uploaded_file)
+# --- 1. פונקציית עזר לציור גרף אישי ---
+def plot_student_trend(df, student_id, score_col):
+    student_col = next((c for c in df.columns if 'id' in str(c).lower()), None)
+    date_col = next((c for c in df.columns if 'date' in str(c).lower() or 'time' in str(c).lower()), None)
     
-    # ניקוי שמות עמודות - קריטי למנועים סטטיסטיים
-    df.columns = [str(c).strip().replace('.', '_').replace(' ', '_') for c in df.columns]
+    if not student_col or not date_col or not score_col:
+        return None
+
+    temp = df.copy()
+    temp[date_col] = pd.to_datetime(temp[date_col], dayfirst=True, errors="coerce")
     
-    # המרה אוטומטית: מה שמספרי הופך ל-float, מה שלא הופך ל-string
-    for col in df.columns:
-        converted = pd.to_numeric(df[col], errors='coerce')
-        if converted.notna().sum() > len(df) * 0.5: # אם רוב העמודה מספרים
-            df[col] = converted
-        else:
-            df[col] = df[col].astype(str)
-
-    # --- הצגת הטאבים ---
-    tab_stats, tab_ai = st.tabs(["🔬 מעבדה סטטיסטית", "🤖 Gemini AI"])
+    # סינון תלמיד ומיון בזמן
+    student_data = temp[temp[student_col] == student_id].dropna(subset=[score_col, date_col])
+    if student_data.empty:
+        return None
+        
+    student_data = student_data.sort_values(date_col)
     
-    with tab_stats:
-        render_stats_lab(df)
+    fig = px.line(
+        student_data, x=date_col, y=score_col, 
+        markers=True, title=f"מגמת {score_col} - תלמיד {student_id}",
+        template="simple_white"
+    )
+    return fig
 
-    with tab_ai:
-        # כאן הייתה הבעיה! קוראים למנוע ה-AI ומעבירים לו את ה-DataFrame
-        render_ai_engine(df)
+# --- 2. המנוע הראשי עם ההגנות של פרפלקסיטי ---
+def render_ai_engine(df):
+    st.header("🎓 מנוע מחקר אישי וקבוצתי")
 
-else:
-    st.info("👋 ברוך הבא! אנא העלה קובץ אקסל בתפריט הצד כדי להתחיל.")
+    if "messages" not in st.session_state:
+        st.session_state.messages = []
+
+    # תצוגת היסטוריה
+    for msg in st.session_state.messages:
+        with st.chat_message(msg["role"]):
+            st.markdown(msg["content"])
+            if msg.get("plot") is not None:
+                st.plotly_chart(msg["plot"], use_container_width=True)
+            if msg.get("table") is not None:
+                st.table(msg["table"])
+
+    if prompt := st.chat_input("שאל על מגמה אישית או ניתוח קבוצתי..."):
+        st.session_state.messages.append({"role": "user", "content": prompt})
+        with st.chat_message("user"):
+            st.markdown(prompt)
+
+        with st.chat_message("assistant"):
+            model = genai.GenerativeModel('gemini-2.0-flash')
+            
+            # --- שלב החילוץ (עם הגנות Perplexity) ---
+            extract_prompt = f"""
+            Columns: {list(df.columns)}. Request: "{prompt}".
+            Return ONLY JSON: {{"student_id": number or null, "target_col": "name" or null, "type": "trend" or "group"}}
+            """
+            
+            student_id, target_col, analysis_type = None, None, "group"
+            try:
+                raw_json = model.generate_content(extract_prompt).text
+                match = re.search(r'\{.*\}', raw_json, re.DOTALL)
+                if match:
+                    params = json.loads(match.group())
+                    student_id = params.get("student_id")
+                    target_col = params.get("target_col")
+                    analysis_type = params.get("type", "group")
+            except Exception:
+                pass # נשאר עם ברירות מחדל
+
+            fig, table = None, None
+            
+            # --- שלב הביצוע ---
+            # 1. ניתוח מגמה אישית
+            if analysis_type == "trend" and student_id is not None:
+                # הגנה: אם המודל לא מצא עמודה מדויקת, ניקח את המספרית הראשונה
+                if target_col not in df.columns:
+                    num_cols = df.select_dtypes(include=[np.number]).columns.tolist()
+                    target_col = num_cols[0] if num_cols else None
+                
+                if target_col:
+                    fig = plot_student_trend(df, student_id, target_col)
+                
+                if fig is not None:
+                    st.plotly_chart(fig)
+                    ai_text = f"מציג את גרף המגמה של תלמיד {student_id} עבור המשתנה {target_col}. הניתוח מבוסס על סדר כרונולוגי של הנתונים."
+                else:
+                    ai_text = f"זיהיתי שביקשת מגמה עבור תלמיד {student_id}, אך לא מצאתי נתונים מספיקים בקובץ לביצוע הניתוח."
+
+            # 2. ניתוח קבוצתי (ANOVA)
+            elif any(w in prompt.lower() for w in ["השוואה", "הבדל", "anova"]):
+                num_cols = df.select_dtypes(include=[np.number]).columns.tolist()
+                cat_cols = [c for c in df.columns if df[c].nunique() < 10 and c not in num_cols]
+                
+                if num_cols and cat_cols:
+                    dv, iv = num_cols[0], cat_cols[0]
+                    model_ols = ols(f'Q("{dv}") ~ C(Q("{iv}"))', data=df).fit()
+                    table = sm.stats.anova_lm(model_ols, typ=3).round(3)
+                    st.table(table)
+                    ai_text = f"בוצע ניתוח ANOVA לבחינת הבדלים ב-{dv} לפי קבוצות ב-{iv}. התוצאות מופיעות בטבלה."
+                else:
+                    ai_text = "לא נמצאו משתנים מתאימים (כמותי וקטגוריאלי) לביצוע ANOVA."
+
+            # 3. מענה חופשי
+            else:
+                ai_text = model.generate_content(f"ענה בעברית על: {prompt}. התבסס על העמודות: {list(df.columns)}").text
+
+            st.markdown(ai_text)
+            st.session_state.messages.append({"role": "assistant", "content": ai_text, "plot": fig, "table": table})
