@@ -4,9 +4,14 @@ import numpy as np
 import os
 import google.generativeai as genai
 from modules.stats_lab import render_stats_lab
-from ai_engine import render_ai_engine
+from ai_engine import render_ai_engine # האימפורט קיים, וזה מצוין
 
 st.set_page_config(page_title="Statistical Monster", layout="wide")
+
+# הגדרת ה-AI (חשוב להגדיר כאן כדי שהמנוע יעבוד)
+GEMINI_KEY = st.secrets.get("GOOGLE_API_KEY") or os.environ.get("GEMINI_API_KEY", "")
+if GEMINI_KEY:
+    genai.configure(api_key=GEMINI_KEY)
 
 # פונקציה לטעינה חכמה - מזהה לבד איפה הכותרות
 def load_data_smart(file):
@@ -42,8 +47,15 @@ if uploaded_file:
         else:
             df[col] = df[col].astype(str)
 
-    # הצגת טאבים
+    # --- הצגת הטאבים ---
     tab_stats, tab_ai = st.tabs(["🔬 מעבדה סטטיסטית", "🤖 Gemini AI"])
+    
     with tab_stats:
         render_stats_lab(df)
 
+    with tab_ai:
+        # כאן הייתה הבעיה! קוראים למנוע ה-AI ומעבירים לו את ה-DataFrame
+        render_ai_engine(df)
+
+else:
+    st.info("👋 ברוך הבא! אנא העלה קובץ אקסל בתפריט הצד כדי להתחיל.")
