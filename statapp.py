@@ -1,114 +1,89 @@
 import streamlit as st
 import pandas as pd
-import os
-import google.generativeai as genai
+import numpy as np
 
-# 1. Imports מהתיקייה החדשה
-from modules.health_check   import render_health_check
-from modules.test_wizard    import render_test_wizard
-from modules.stats_lab      import render_stats_lab
-from modules.thesis_writer  import render_thesis_writer
-from modules.consultation   import render_consultation
-
-# הגדרות עמוד
-st.set_page_config(page_title="Statistical Monster - Thesis Helper", layout="wide", page_icon="🧪")
-
-# --- מנגנון איפוס קבצים (תיקון קומט) ---
-if 'last_uploaded_file' not in st.session_state:
-    st.session_state['last_uploaded_file'] = None
-
-# הגדרת ה-AI
-GEMINI_KEY = st.secrets.get("GOOGLE_API_KEY") or os.environ.get("GEMINI_API_KEY", "")
-if GEMINI_KEY:
-    genai.configure(api_key=GEMINI_KEY)
-
-st.title("🧪 Statistical Monster")
-st.write("עוזר מחקר AI לסטודנטים לתזה - המעבדה הסטטיסטית שלך")
-
-# העלאת קובץ
-uploaded_file = st.sidebar.file_uploader("העלה קובץ אקסל (XLSX)", type=["xlsx"])
+# --- פונקציית עזר לטעינה חכמה ---
+def smart_load_excel(uploaded_file):
+    # טעינה זמנית של תחילת הקובץ כדי להבין את המבנה
+    preview = pd.read_excel(uploaded_file, nrows=5, header=None)
+    
+    # חישוב: איזו שורה נראית כמו כותרת (יותר טקסט ממספרים)
+    header_row = 0
+    for i in range(min(3, len(preview))):
+        text_count = preview.iloc[i].apply(lambda x: isinstance(x, str)).sum()
+        if text_count > (len(preview.columns) / 2):
+            header_row = i
+            break
+    
+    # טעינה סופית עם ה-Header הנכון
+    uploaded_file.seek(0)
+    return pd.read_excel(uploaded_file, header=header_row)
 
 if uploaded_file:
-    # בדיקה האם הקובץ הוחלף
-    if uploaded_file.name != st.session_state['last_uploaded_file']:
-        # ניקוי ה-Session State פרט לשם הקובץ החדש
+    # איפוס חסין במידה והקובץ הוחלף
+    if uploaded_file.name != st.session_state.get('last_uploaded_file'):
         st.session_state.clear()
         st.session_state['last_uploaded_file'] = uploaded_file.name
-        st.rerun() # טעינה מחדש נקייה לחלוטין
+        st.rerun()
 
-    # 1. טעינת האקסל (הוספתי Try-Except למקרה של קובץ פגום)
     try:
-        # header=1 אומר שהכותרות בשורה השנייה (מתאים לקבצי Google Forms מסוימים)
-        df = pd.read_excel(uploaded_file, header=1)
+        # 1. טעינה חכמה
+        df = smart_load_excel(uploaded_file)
         
-        # 2. ניקוי שמות העמודות בצורה אגרסיבית
-        new_columns = []
-        for i, col in enumerate(df.columns):
-            clean_name = str(col).strip()
-            if clean_name == "" or "Unnamed" in clean_name or "nan" in clean_name.lower():
-                new_columns.append(f"Var_{i}")
-            else:
-                new_columns.append(clean_name)
-        df.columns = new_columns
+        # 2. ניקוי שמות עמודות
+        df.columns = [str(c).strip().replace('.', '_') for c in df.columns]
 
-        # 3. המרה ראשונית למספרים (בלי לאבד נתונים)
-        df = df.apply(pd.to_numeric, errors='ignore')
+        # 3. ניקוי עמודות ריקות לחלוטיn
+        df = df.dropna(axis=1, how='all')
 
-        st.success(f"✅ הקובץ '{uploaded_file.name}' נטען! {len(df.columns)} משתנים זוהו.")
+        # 4. המרה אוטומטית למספרים היכן שאפשר
+        for col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors='ignore')
 
-        # --- ה-Variable View החכם ---
-        with st.expander("⚙️ הגדרת סוגי משתנים (Variable View)"):
-            # יצירת מפתח ייחודי ל-editor שתלוי בשם הקובץ כדי שלא יזכור בחירות ישנות
-            editor_key = f"editor_{uploaded_file.name}"
+        st.success(f"✅ המנוע הסתגל לקובץ: '{uploaded_file.name}'")
+
+        # --- Variable View אוטומטי לחלוטין ---
+        with st.expander("⚙️ הגדרת משתנים אוטומטית (Variable View)"):
+            var_data = []
+            for col in df.columns:
+                unique_vals = df[col].nunique()
+                is_numeric = pd.api.types.is_numeric_dtype(df[col])
+                
+                # כלל אצבע: אם יש פחות מ-10 ערכים ייחודיים, זה כנראה Nominal (קבוצה)
+                is_nominal = not is_numeric or unique_vals < 10
+                
+                var_data.append({
+                    "Variable": col,
+                    "Type": "Scale (📏)" if is_numeric and not is_nominal else "Nominal (🧬)",
+                    "Unique Values": unique_vals,
+                    "Selected as Group?": is_nominal
+                })
             
-            var_settings = pd.DataFrame({
-                "Variable": df.columns,
-                "Is Nominal?": [not pd.api.types.is_numeric_dtype(df[col]) for col in df.columns]
-            })
-
-            edited_settings = st.data_editor(
-                var_settings,
+            settings_df = pd.DataFrame(var_data)
+            edited_df = st.data_editor(
+                settings_df,
                 column_config={
                     "Variable": st.column_config.TextColumn("שם המשתנה", disabled=True),
-                    "Is Nominal?": st.column_config.CheckboxColumn("Nominal (V) / Scale (ריק)")
+                    "Type": st.column_config.TextColumn("סיווג אוטומטי", disabled=True),
+                    "Unique Values": st.column_config.NumberColumn("ערכים ייחודיים", disabled=True),
+                    "Selected as Group?": st.column_config.CheckboxColumn("בחר כמשתנה קבוצה (Major)")
                 },
                 hide_index=True,
-                use_container_width=True,
-                key=editor_key
+                key=f"editor_{uploaded_file.name}"
             )
 
-            # עדכון ה-DF לפי הבחירה ב-Editor
-            nominal_list = edited_settings[edited_settings["Is Nominal?"] == True]["Variable"].tolist()
-            for col in df.columns:
-                if col in nominal_list:
-                    df[col] = df[col].astype(str)
+            # עדכון סופי של הנתונים לפני המעבדה
+            for _, row in edited_df.iterrows():
+                v_name = row["Variable"]
+                if row["Selected as Group?"]:
+                    df[v_name] = df[v_name].astype(str)
                 else:
-                    df[col] = pd.to_numeric(df[col], errors='coerce')
+                    df[v_name] = pd.to_numeric(df[v_name], errors='coerce')
 
-        st.divider()
-
-        # --- ניהול הטאבים ---
+        # מעבר לטאבים
         tab_stats, tab_visuals, tab_ai = st.tabs(["🔬 מעבדה סטטיסטית", "📈 גרפים", "🤖 Gemini AI"])
-        
         with tab_stats:
-            # שליחת ה-DF המעודכן למעבדה
             render_stats_lab(df)
-            
-        with tab_visuals:
-            st.info("כאן יוצגו הגרפים הנוספים שלך.")
-            
-        with tab_ai:
-            st.subheader("ייעוץ AI חופשי")
-            # העברת שמות העמודות ל-AI כדי שיכיר את המייג'ור והמשתנים
-            if st.button("נתח את מבנה הקובץ שלי (AI)"):
-                model = genai.GenerativeModel('gemini-2.0-flash')
-                prompt = f"הנה רשימת המשתנים שלי: {list(df.columns)}. מי מהם נראה לך כמו המייג'ור או משתנה בלתי תלוי? ענה בקצרה בעברית."
-                response = model.generate_content(prompt)
-                st.write(response.text)
 
     except Exception as e:
-        st.error(f"שגיאה בקריאת הקובץ: {e}")
-
-else:
-    st.info("👋 ברוך הבא! אנא העלה קובץ אקסל בתפריט הצד כדי להתחיל בניתוח.")
-    st.session_state['last_uploaded_file'] = None
+        st.error(f"המנוע נתקל בקושי בקריאת הקובץ: {e}")
