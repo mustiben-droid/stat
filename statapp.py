@@ -1,82 +1,103 @@
 import streamlit as st
 import pandas as pd
-# ייבוא המנוע מהקובץ השני שלך
-from ai_engine import render_ai_engine 
+import google.generativeai as genai
+from ai_engine import render_ai_engine
 
-# הגדרת עמוד - חייב להיות הפקודה הראשונה של Streamlit
+# 1. הגדרות עמוד (חייב להיות ראשון)
 st.set_page_config(
-    page_title="עוזר מחקר אקדמי AI",
+    page_title="AI Research Assistant",
     page_icon="🎓",
-    layout="wide", # נותן יותר מרחב לטבלאות וגרפים
+    layout="wide",
     initial_sidebar_state="expanded"
 )
 
-# עיצוב בסיסי ליישור לימין (RTL)
+# 2. הגדרת מפתח API (מומלץ להשתמש ב-Secrets של Streamlit או להזין כאן)
+# אם יש לך מפתח קבוע, שים אותו במקום ה-YOUR_API_KEY
+if "api_key" not in st.session_state:
+    st.session_state.api_key = ""
+
+# 3. יישור לימין (RTL) ועיצוב אקדמי בעזרת CSS
 st.markdown("""
     <style>
-    .reportview-container {
+    @import url('https://fonts.googleapis.com/css2?family=Assistant:wght@300;400;700&display=swap');
+    
+    html, body, [class*="css"] {
+        font-family: 'Assistant', sans-serif;
         direction: rtl;
+        text-align: right;
+    }
+    .stButton>button {
+        width: 100%;
+        border-radius: 5px;
+        height: 3em;
+        background-color: #f0f2f6;
+    }
+    .stTextInput>div>div>input {
         text-align: right;
     }
     </style>
     """, unsafe_allow_html=True)
 
-# --- תפריט צד (Sidebar) ---
+# 4. תפריט צד (Sidebar)
 with st.sidebar:
-    st.title("📂 ניהול נתונים")
-    st.write("העלה את קובץ המחקר שלך כאן:")
+    st.title("⚙️ הגדרות מערכת")
     
-    uploaded_file = st.file_uploader(
-        "בחר קובץ Excel או CSV", 
-        type=["xlsx", "xls", "csv"],
-        help="תומך בקבצי אקסל ו-CSV שהורדו מ-Qualtrics או SPSS"
-    )
+    # הזנת מפתח API במידה ולא מוגדר ב-Secrets
+    user_key = st.text_input("הזן Google API Key:", type="password")
+    if user_key:
+        st.session_state.api_key = user_key
+        genai.configure(api_key=user_key)
+    
+    st.divider()
+    
+    st.header("📂 טעינת נתונים")
+    uploaded_file = st.file_uploader("בחר קובץ אקסל או CSV", type=["xlsx", "csv"])
     
     if uploaded_file:
-        st.success(f"✅ הקובץ '{uploaded_file.name}' נטען")
-        
-        if st.button("🗑️ נקה היסטוריית צ'אט"):
-            if "messages" in st.session_state:
-                st.session_state.messages = []
+        st.success(f"קובץ נטען: {uploaded_file.name}")
+        if st.button("🗑️ נקה היסטוריית מחקר"):
+            st.session_state.messages = []
             st.rerun()
 
-# --- גוף האפליקציה המרכזי ---
-if uploaded_file is not None:
-    try:
-        # טעינת הנתונים לפי סוג הקובץ
-        if uploaded_file.name.endswith(".csv"):
-            df = pd.read_csv(uploaded_file)
-        else:
-            df = pd.read_excel(uploaded_file)
-        
-        # הפעלת הפונקציה המרכזית מקובץ ai_engine.py
-        render_ai_engine(df)
-        
-    except Exception as e:
-        st.error(f"⚠️ שגיאה בטעינת הקובץ: {e}")
-        st.info("וודא שהקובץ אינו פתוח בתוכנה אחרת (כמו אקסל) ונסה שוב.")
+# 5. לוגיקה מרכזית
+def main():
+    if not st.session_state.api_key:
+        st.warning("⚠️ נא להזין מפתח API בתפריט הצד כדי להפעיל את יכולות ה-AI.")
+        st.info("ניתן להנפיק מפתח בחינם בכתובת: https://aistudio.google.com/app/apikey")
+        return
 
-else:
-    # דף נחיתה מוצג כשאין קובץ טעון
-    st.title("🎓 ברוכים הבאים לעוזר המחקר האקדמי")
-    st.write("---")
-    
-    col1, col2 = st.columns(2)
-    
-    with col1:
-        st.subheader("מה המערכת יודעת לעשות?")
+    if uploaded_file is not None:
+        try:
+            # קריאת הקובץ
+            if uploaded_file.name.endswith(".csv"):
+                df = pd.read_csv(uploaded_file)
+            else:
+                df = pd.read_excel(uploaded_file)
+            
+            # בדיקה שהקובץ לא ריק
+            if df.empty:
+                st.error("הקובץ שהועלה ריק.")
+                return
+
+            # הפעלת המנוע מתוך ai_engine.py
+            render_ai_engine(df)
+            
+        except Exception as e:
+            st.error(f"שגיאה בתהליך טעינת הנתונים: {e}")
+    else:
+        # דף נחיתה
+        st.title("🎓 עוזר מחקר אקדמי חכם")
+        st.subheader("כלי לניתוח סטטיסטי, ויזואליזציה וכתיבת ממצאים")
+        
         st.markdown("""
-        * **ניתוח מגמות אישיות:** "הצג את ההתקדמות של תלמיד 10 במבחן המרחבי".
-        * **השוואת קבוצות (ANOVA):** "האם יש הבדל בין בנים לבנות בציון הסופי?".
-        * **סטטיסטיקה תיאורית:** הפקת טבלאות בסגנון SPSS בלחיצת כפתור.
-        * **כתיבה אקדמית:** ניסוח הממצאים בפורמט APA 7 מוכן להעתקה.
+        ### איך זה עובד?
+        1. **מזינים מפתח API** (בצד ימין למעלה).
+        2. **מעלים קובץ נתונים** (Excel או CSV).
+        3. **מתחילים לחקור:** ניתן לבקש מה-AI לנתח מגמות של תלמידים ספציפיים, לבצע מבחני ANOVA או להפיק סטטיסטיקה תיאורית.
+        
+        המערכת תייצר עבורך גרפים אינטראקטיביים וניסוחים מוכנים לפרק הממצאים בתזה/עבודה שלך.
         """)
-    
-    with col2:
-        st.info("👈 **כדי להתחיל, העלה קובץ נתונים בתפריט הצד.**")
-        # אופציונלי: הוספת תמונה או הסבר על מבנה הקובץ הרצוי
         
 
-# --- כותרת תחתונה ---
-st.sidebar.markdown("---")
-st.sidebar.caption("פותח עבור חוקרים וסטודנטים | 2026")
+if __name__ == "__main__":
+    main()
