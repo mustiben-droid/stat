@@ -1,66 +1,83 @@
 import streamlit as st
 import google.generativeai as genai
 import plotly.express as px
+import pandas as pd
+import re
 
-def render_ai_analysis(df):
-    st.subheader("🤖 עוזר מחקר וניתוח ויזואלי")
+def render_ai_engine(df):
+    st.subheader("🤖 מנוע ניתוח נתונים מבוסס פקודות")
+    st.info("ניתן לכתוב פקודות חופשיות, למשל: 'תראה לי גרף שיפור של תלמיד 4 בציון score_proj'")
 
-    # --- חלק 1: בונה גרפים מהיר (SPSS Style) ---
-    with st.expander("📊 בונה גרפים מהיר וניתוח אוטומטי", expanded=False):
-        col1, col2, col3 = st.columns(3)
-        with col1:
-            chart_type = st.selectbox("סוג גרף", ["גרף פיזור", "גרף עמודות (ממוצעים)", "תיבת נתונים (Boxplot)"])
-        with col2:
-            x_var = st.selectbox("ציר X (משתנה בלתי תלוי)", df.columns)
-        with col3:
-            y_var = st.selectbox("ציר Y (משתנה תלוי)", df.select_dtypes(include=['number']).columns)
-
-        if st.button("צור גרף ונתח"):
-            if chart_type == "גרף פיזור":
-                fig = px.scatter(df, x=x_var, y=y_var, trendline="ols", template="plotly_white")
-            elif chart_type == "גרף עמודות (ממוצעים)":
-                fig = px.bar(df, x=x_var, y=y_var, barmode="group", template="plotly_white")
-            else:
-                fig = px.box(df, x=x_var, y=y_var, template="plotly_white")
-            
-            st.plotly_chart(fig, use_container_width=True)
-            
-            # שליחה אוטומטית ל-AI לניתוח הגרף שנוצר
-            st.info("💡 ניתוח ה-AI לגרף שנוצר:")
-            with st.spinner("מנתח את המגמות..."):
-                model = genai.GenerativeModel('gemini-2.0-flash')
-                analysis_prompt = f"נתח בקצרה ובשורה תחתונה את הקשר בין {x_var} ל-{y_var} בגרף {chart_type}. הנה הסטטיסטיקה: {df[[x_var, y_var]].describe().to_string()}"
-                response = model.generate_content(analysis_prompt)
-                st.write(response.text)
-
-    st.divider()
-
-    # --- חלק 2: הצ'אט המוכר (עם היסטוריה) ---
+    # ניהול זיכרון הצ'אט
     if "messages" not in st.session_state:
         st.session_state.messages = []
 
+    # הצגת היסטוריה
     for message in st.session_state.messages:
         with st.chat_message(message["role"]):
             st.markdown(message["content"])
+            if "plot" in message:
+                st.plotly_chart(message["plot"], use_container_width=True)
 
-    if prompt := st.chat_input("שאל אותי על הנתונים או בקש המלצה לגרף..."):
+    # קלט משתמש
+    if prompt := st.chat_input("איזו בדיקה להריץ עבורך?"):
         st.chat_message("user").markdown(prompt)
         st.session_state.messages.append({"role": "user", "content": prompt})
 
-        try:
-            model = genai.GenerativeModel('gemini-2.0-flash')
-            column_names = ", ".join(df.columns.tolist())
-            
-            full_context = f"""
-            אתה עוזר מחקר סטטיסטי. השתמש בשמות המשתנים: {column_names}.
-            ענה בקצרה ובתכל'ס. אם המשתמש שואל על קשרים, הצע לו איזה גרף לבנות ב'בונה הגרפים' למעלה.
-            היסטוריה: {st.session_state.messages[-3:]} 
-            שאלה: {prompt}
-            """
-            
-            response = model.generate_content(full_context)
-            with st.chat_message("assistant"):
+        with st.chat_message("assistant"):
+            try:
+                model = genai.GenerativeModel('gemini-2.0-flash')
+                
+                # יצירת הקשר ל-AI על מבנה הנתונים
+                context = f"""
+                You are a data scientist. User Dataframe columns: {list(df.columns)}.
+                Sample values: {df.head(2).to_dict()}
+                User Request: {prompt}
+                
+                Guidelines:
+                1. If asked about a specific student ID, look for 'student_id'.
+                2. If asked about progress or time, use 'date'.
+                3. If you identify a specific analysis, explain what you found in Hebrew.
+                """
+                
+                response = model.generate_content(context)
                 st.markdown(response.text)
-            st.session_state.messages.append({"role": "assistant", "content": response.text})
-        except Exception as e:
-            st.error(f"שגיאה: {e}")
+                
+                # --- מנגנון ביצוע פקודות (Execution Engine) ---
+                fig = None
+                
+                # חיפוש מזהה תלמיד (למשל "תלמיד 1" או "id 4")
+                id_match = re.search(r'(?:תלמיד|סטודנט|id|ID)\s*(\d+)', prompt)
+                
+                if id_match:
+                    target_id = int(id_match.group(1))
+                    # סינון הנתונים לתלמיד הספציפי
+                    student_df = df[df['student_id'] == target_id].copy()
+                    
+                    if not student_df.empty:
+                        # בדיקה אם ביקשו שיפור/התקדמות/זמן
+                        if any(w in prompt for w in ["שיפור", "התקדמות", "זמן", "date", "תאריך"]):
+                            if 'date' in df.columns:
+                                # המרה לתאריך ומיון
+                                student_df['date'] = pd.to_datetime(student_df['date'])
+                                student_df = student_df.sort_values('date')
+                                
+                                # בחירת עמודת הציון (לפי מה שהמשתמש כתב או ברירת מחדל)
+                                y_col = next((c for c in df.columns if c in prompt), 'score_proj')
+                                
+                                if y_col in df.columns:
+                                    fig = px.line(student_df, x='date', y=y_col, 
+                                                 title=f"גרף התקדמות: תלמיד {target_id} (משתנה {y_col})",
+                                                 markers=True, template="plotly_white")
+                                    st.plotly_chart(fig, use_container_width=True)
+                                    st.success(f"ניתוח הושלם עבור תלמיד {target_id}.")
+                    else:
+                        st.warning(f"לא מצאתי נתונים עבור תלמיד שמספרו {target_id}")
+
+                # שמירה להיסטוריה
+                msg_entry = {"role": "assistant", "content": response.text}
+                if fig: msg_entry["plot"] = fig
+                st.session_state.messages.append(msg_entry)
+
+            except Exception as e:
+                st.error(f"שגיאה במנוע ה-AI: {e}")
