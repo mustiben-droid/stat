@@ -6,7 +6,6 @@ Requirements:
 
 Run:
     streamlit run statlab_pro.py
-"""
 
 import streamlit as st
 import pandas as pd
